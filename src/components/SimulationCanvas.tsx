@@ -83,7 +83,7 @@ export default function SimulationCanvas({
     if (!ctx) return;
 
     // DIAG ──────────────────────────────────────────────────────────────────
-    const __DIAG__ = true;
+    const __DIAG__ = false;
     const _draw0 = performance.now();
     let _hotCells = 0;
     // END DIAG ───────────────────────────────────────────────────────────────

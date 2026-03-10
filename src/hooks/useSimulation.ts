@@ -155,7 +155,7 @@ export function useSimulation() {
   const pendingGridRef = useRef<Float32Array | null>(null);
 
   // ── DIAG: remove this entire block when done ────────────────────────────
-  const __DIAG__ = true;
+  const __DIAG__ = false;
 
   // Rolling event log — last 200 entries kept, each entry stamped with
   // elapsed seconds since simulation start so the report is self-contained.
