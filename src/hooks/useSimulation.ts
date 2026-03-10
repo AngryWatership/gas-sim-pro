@@ -31,6 +31,7 @@ type Action =
   | { type: "ADD_LEAK"; leak: GasLeak }
   | { type: "REMOVE_LEAK"; id: string }
   | { type: "ADD_SENSOR"; sensor: Sensor }
+  | { type: "BATCH_SENSORS"; sensors: Sensor[] }
   | { type: "REMOVE_SENSOR"; id: string }
   | { type: "SET_WALL"; indices: number[] }
   | { type: "SET_DOOR"; indices: number[] }
@@ -51,6 +52,11 @@ function reducer(state: SimulationState, action: Action): SimulationState {
       return { ...state, gasLeaks: state.gasLeaks.filter((l) => l.id !== action.id) };
     case "ADD_SENSOR":
       return { ...state, sensors: [...state.sensors, action.sensor] };
+    case "BATCH_SENSORS": {
+      const existing = new Set(state.sensors.map(s => s.row * 10000 + s.col));
+      const toAdd = action.sensors.filter(s => !existing.has(s.row * 10000 + s.col));
+      return toAdd.length ? { ...state, sensors: [...state.sensors, ...toAdd] } : state;
+    }
     case "REMOVE_SENSOR":
       return { ...state, sensors: state.sensors.filter((s) => s.id !== action.id) };
     case "SET_WALL": {
@@ -130,6 +136,7 @@ export function useSimulation() {
   );
   const windShadowRef = useRef<Uint8Array>(windShadow);
   windShadowRef.current = windShadow;
+
 
   // ── Deadlock-safe physics loop ─────────────────────────────────────────
   // Problem: calling dispatch(SET_GRID) inside rAF causes React to schedule
@@ -335,10 +342,10 @@ export function useSimulation() {
         return;
       }
       if (activeTool === "sensor") {
-        cells.forEach(({ row, col }) => {
-          if (!stateRef.current.sensors.some((s) => s.row === row && s.col === col))
-            dispatch({ type: "ADD_SENSOR", sensor: { id: `s-${Date.now()}-${row}-${col}`, row, col } });
-        });
+        // Single batched dispatch — avoids N separate re-renders for N sensors
+        dispatch({ type: "BATCH_SENSORS", sensors: cells.map(({ row, col }) => ({
+          id: `s-${Date.now()}-${row}-${col}`, row, col,
+        })) });
         return;
       }
       if (activeTool === "wall") {

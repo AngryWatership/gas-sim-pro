@@ -1,21 +1,18 @@
 /**
- * Wind Shadow Mask
+ * Wind Shadow Mask — v3
  *
- * Concept:
- *   Real wind is blocked by solid obstacles and creates a sheltered "shadow"
- *   zone on the downwind side. We model this by:
- *
- *   1. For every solid wall cell, cast a ray in the DOWNWIND direction
- *      (same direction as wind vector).
- *   2. Every cell hit by that ray is marked as sheltered (windShadow = 1).
- *   3. A door interrupts occlusion — the ray stops casting shadow once it
- *      exits a wall run through a door gap.
- *   4. Cells marked sheltered receive zero wind flux in the advection step.
- *
- * The mask is recomputed only when the wind vector or wall layout changes,
- * not every physics tick.
- *
- * Complexity: O(walls × max_ray_length) ≤ O(N²) worst case, fine for 100×100.
+ * Rules:
+ *   1. A contiguous run of (wall OR door) cells forms one segment — doors
+ *      do not break a wall into separate pieces.
+ *   2. Rays are cast only from the outermost SOLID WALL cells of each segment
+ *      (not from door cells, even if a door is at the physical end of a run).
+ *      Walking inward from the raw extremity until we hit a solid cell gives
+ *      the correct anchor.
+ *   3. Every unvisited solid wall cell also casts individually (handles
+ *      isolated cells, L-corners, diagonal walls).
+ *   4. Rays travel all the way to the canvas boundary — no early exit on
+ *      hitting another wall. The total mask is the union of all rays, so
+ *      overlapping rays are harmless (shadow[i]=1 twice = shadow[i]=1).
  */
 
 export function buildWindShadow(
@@ -24,57 +21,108 @@ export function buildWindShadow(
   rows: number,
   cols: number,
   windX: number,
-  windY: number
+  windY: number,
 ): Uint8Array {
   const shadow = new Uint8Array(rows * cols);
+  if (windX === 0 && windY === 0) return shadow;
 
-  if (windX === 0 && windY === 0) return shadow; // no wind → no shadow
-
-  // Normalise wind to step direction (±1 or 0 per axis).
-  // We step one cell at a time in the dominant wind direction.
-  // For diagonal wind we alternate rows/cols proportionally using
-  // Bresenham-style DDA so the shadow cone tracks the actual vector.
   const ax = Math.abs(windX);
   const ay = Math.abs(windY);
   const sx = windX > 0 ? 1 : windX < 0 ? -1 : 0;
   const sy = windY > 0 ? 1 : windY < 0 ? -1 : 0;
 
+  // Cast from (r,c) all the way to the canvas boundary, marking every cell.
+  function castRay(r: number, c: number) {
+    let cr = r + sy;
+    let cc = c + sx;
+    let err = ax - ay;
+    while (cr >= 0 && cr < rows && cc >= 0 && cc < cols) {
+      shadow[cr * cols + cc] = 1;
+      if (ax === 0) {
+        cr += sy;
+      } else if (ay === 0) {
+        cc += sx;
+      } else {
+        const e2 = 2 * err;
+        if (e2 > -ay) { err -= ay; cc += sx; }
+        if (e2 <  ax) { err += ax; cr += sy; }
+      }
+    }
+  }
+
+  // Given the raw start/end indices of a segment, find the innermost solid
+  // wall cell by stepping inward. Returns -1 if no solid cell exists (pure
+  // door segment — no ray cast).
+  function solidExtremity(
+    fixed: number,        // the row (horiz) or col (vert) that doesn't change
+    a: number,            // one end of the segment (col or row index)
+    b: number,            // other end
+    isHoriz: boolean,
+  ): [number, number] | null {
+    // Walk from a toward b until we find a solid wall cell
+    const step = a <= b ? 1 : -1;
+    for (let i = a; i !== b + step; i += step) {
+      const idx = isHoriz ? fixed * cols + i : i * cols + fixed;
+      if (blockedCells[idx] && !doorCells[idx]) return isHoriz ? [fixed, i] : [i, fixed];
+    }
+    return null;
+  }
+
+  const visited = new Uint8Array(rows * cols);
+
+  // Helper: cast from the solid extremity of a segment and mark visited.
+  function castFromExtremity(r: number, c: number) {
+    visited[r * cols + c] = 1;
+    castRay(r, c);
+  }
+
+  // ── Horizontal segments (scan by row) ──────────────────────────────────
+  for (let r = 0; r < rows; r++) {
+    let segStart = -1;
+    for (let c = 0; c <= cols; c++) {
+      // Doors count as wall material for continuity — they don't break segments
+      const isWallMaterial = c < cols && !!(blockedCells[r * cols + c]);
+      if (isWallMaterial && segStart === -1) {
+        segStart = c;
+      } else if (!isWallMaterial && segStart !== -1) {
+        const c0 = segStart, c1 = c - 1;
+        // Cast from the outermost SOLID cell on each end (skip if door is at extremity)
+        const left  = solidExtremity(r, c0, c1, true);
+        const right = solidExtremity(r, c1, c0, true);
+        if (left)  castFromExtremity(left[0],  left[1]);
+        if (right && !(right[0] === left?.[0] && right[1] === left?.[1]))
+          castFromExtremity(right[0], right[1]);
+        segStart = -1;
+      }
+    }
+  }
+
+  // ── Vertical segments (scan by col) ────────────────────────────────────
+  for (let c = 0; c < cols; c++) {
+    let segStart = -1;
+    for (let r = 0; r <= rows; r++) {
+      const isWallMaterial = r < rows && !!(blockedCells[r * cols + c]);
+      if (isWallMaterial && segStart === -1) {
+        segStart = r;
+      } else if (!isWallMaterial && segStart !== -1) {
+        const r0 = segStart, r1 = r - 1;
+        const top    = solidExtremity(c, r0, r1, false);
+        const bottom = solidExtremity(c, r1, r0, false);
+        if (top)    castFromExtremity(top[0],    top[1]);
+        if (bottom && !(bottom[0] === top?.[0] && bottom[1] === top?.[1]))
+          castFromExtremity(bottom[0], bottom[1]);
+        segStart = -1;
+      }
+    }
+  }
+
+  // ── Individual solid wall cells (unvisited: isolated cells, corners) ────
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const idx = r * cols + c;
-      // Only solid walls cast shadows (doors do NOT block wind)
-      if (!blockedCells[idx] || doorCells[idx]) continue;
-
-      // March downwind from this wall cell
-      let cr = r + sy;
-      let cc = c + sx;
-      // DDA error accumulator for diagonal wind
-      let err = ax - ay;
-
-      while (cr >= 0 && cr < rows && cc >= 0 && cc < cols) {
-        const cidx = cr * cols + cc;
-
-        // Another solid wall encountered → it will cast its own shadow,
-        // stop this ray (the wall itself is not in shadow)
-        if (blockedCells[cidx] && !doorCells[cidx]) break;
-
-        // Door gap → let wind through, stop the shadow here
-        if (doorCells[cidx]) break;
-
-        // Open cell — mark as shadowed
-        shadow[cidx] = 1;
-
-        // DDA step
-        if (ax === 0) {
-          cr += sy;
-        } else if (ay === 0) {
-          cc += sx;
-        } else {
-          const e2 = 2 * err;
-          if (e2 > -ay) { err -= ay; cc += sx; }
-          if (e2 <  ax) { err += ax; cr += sy; }
-        }
-      }
+      if (!blockedCells[idx] || doorCells[idx]) continue; // solid walls only
+      if (visited[idx]) continue;
+      castRay(r, c);
     }
   }
 

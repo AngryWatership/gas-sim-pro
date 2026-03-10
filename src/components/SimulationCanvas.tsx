@@ -70,6 +70,9 @@ export default function SimulationCanvas({
   const canvasRef      = useRef<HTMLCanvasElement>(null);
   const wallStartRef   = useRef<{ row: number; col: number } | null>(null);
   const eraserDragging = useRef(false);
+  // Ref so eraserSize is always current inside useCallback closures (no stale deps)
+  const eraserSizeRef  = useRef(eraserSize);
+  eraserSizeRef.current = eraserSize;
   const [previewLine, setPreviewLine] = useState<Array<{ row: number; col: number }>>([]);
   const [hoverCell, setHoverCell]     = useState<{ row: number; col: number } | null>(null);
 
@@ -116,14 +119,16 @@ export default function SimulationCanvas({
               if (__DIAG__) _hotCells++; // DIAG
               const v = Math.min(1, val);
               if (lightMode) {
+                // Original light mode:blue-tinted cyan on black
+                pr = Math.round(v * v * 180);
+                pg = Math.round(v * 220);
+                pb = Math.round(80 + v * 175);
+              }  else {
+                // Original dark mode: warm red on white
                 pr = 255;
                 pg = Math.round(220 - v * 180);
                 pb = Math.round(180 - v * 180);
                 pa = Math.round(40 + v * 200);
-              } else {
-                pr = Math.round(v * v * 180);
-                pg = Math.round(v * 220);
-                pb = Math.round(80 + v * 175);
               }
               // Blend wind shadow on top of gas
               if (showShadow && windShadow[cellIdx]) {
@@ -167,7 +172,7 @@ export default function SimulationCanvas({
     if (hoverCell && tool !== "none") {
       const glowColor = TOOL_GLOW[tool];
       if (glowColor) {
-        const cells = tool === "eraser" ? eraserFootprint(hoverCell, eraserSize) : [hoverCell];
+        const cells = tool === "eraser" ? eraserFootprint(hoverCell, eraserSizeRef.current) : [hoverCell];
 
         cells.forEach(({ row, col }) => {
           ctx.fillStyle = `${glowColor}28`;
@@ -293,18 +298,28 @@ export default function SimulationCanvas({
       setPreviewLine([cell]);
     } else if (tool === "eraser") {
       eraserDragging.current = true;
-      onCellsInteract(eraserFootprint(cell, eraserSize), "eraser");
+      onCellsInteract(eraserFootprint(cell, eraserSizeRef.current), "eraser");
     }
   }, [tool, getCell, onCellsInteract]);
+
+  const lastEraseCellRef = useRef<{ row: number; col: number } | null>(null);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const cell = getCell(e);
     setHoverCell(cell);
     if (tool === "eraser") {
-      if (eraserDragging.current && e.buttons === 1)
-        onCellsInteract(eraserFootprint(cell, eraserSize), "eraser");
+      if (eraserDragging.current && e.buttons === 1) {
+        // Only dispatch when cursor moves to a different cell — prevents
+        // flooding dispatch with identical erase operations on sub-cell moves
+        const last = lastEraseCellRef.current;
+        if (!last || last.row !== cell.row || last.col !== cell.col) {
+          lastEraseCellRef.current = cell;
+          onCellsInteract(eraserFootprint(cell, eraserSizeRef.current), "eraser");
+        }
+      }
       return;
     }
+    lastEraseCellRef.current = null;
     if (tool !== "wall" || !wallStartRef.current || e.buttons !== 1) return;
     const { row: r0, col: c0 } = wallStartRef.current;
     let er = cell.row, ec = cell.col;
@@ -313,7 +328,7 @@ export default function SimulationCanvas({
   }, [tool, getCell, onCellsInteract]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (tool === "eraser") { eraserDragging.current = false; return; }
+    if (tool === "eraser") { eraserDragging.current = false; lastEraseCellRef.current = null; return; }
     if (tool !== "wall" || !wallStartRef.current) return;
     const cell = getCell(e);
     const { row: r0, col: c0 } = wallStartRef.current;
