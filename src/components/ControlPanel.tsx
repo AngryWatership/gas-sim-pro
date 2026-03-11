@@ -22,6 +22,7 @@ interface Props {
   onLightModeToggle: () => void;
   onParamsChange: (p: SimParams) => void;
   onLoad: (snapshot: LayoutSnapshot, target: LoadTarget) => void;
+  onRandomise: () => void;
 }
 
 interface ToolBtn {
@@ -150,7 +151,7 @@ export default function ControlPanel({
   tool, running, lightMode, params, simState,
   showShadow, eraserSize, onEraserSizeChange,
   onShowShadowToggle, onToolChange, onToggle, onReset,
-  onLightModeToggle, onParamsChange, onLoad,
+  onLightModeToggle, onParamsChange, onLoad, onRandomise,
 }: Props) {
   const eraserColor = "#a0a0c0";
 
@@ -277,6 +278,21 @@ export default function ControlPanel({
             RESET
           </button>
           <button
+            onClick={onRandomise}
+            title="Generate a random layout (resets current grid)"
+            style={{
+              padding: "9px 12px", borderRadius: 6,
+              border: "1px solid #a855f740",
+              background: "#a855f715",
+              color: "#c084fc",
+              cursor: "pointer", fontSize: 13,
+              fontFamily: "var(--mono)", letterSpacing: 1,
+              display: "flex", alignItems: "center", gap: 8,
+            }}
+          >
+            <span style={{ fontSize: 15 }}>⚄</span> RANDOM
+          </button>
+          <button
             onClick={onLightModeToggle}
             style={{
               padding: "9px 12px", borderRadius: 6,
@@ -298,4 +314,3 @@ export default function ControlPanel({
     </aside>
   );
 }
-

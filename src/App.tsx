@@ -4,6 +4,7 @@ import ControlPanel from "./components/ControlPanel";
 import type { EraserSize } from "./components/ControlPanel";
 import SensorStats from "./components/SensorStats";
 import { useSimulation } from "./hooks/useSimulation";
+import { generateRandomLayout } from "./utils/randomLayout";
 
 export default function App() {
   const {
@@ -15,6 +16,16 @@ export default function App() {
 
   const [showShadow, setShowShadow] = useState(false);
   const [eraserSize, setEraserSize] = useState<EraserSize>({ w: 1, h: 1 });
+
+  const handleRandomise = () => {
+    const { snapshot, params: rndParams } = generateRandomLayout();
+    reset();                          // clears grid + stops simulation
+    // Use a microtask so the RESET dispatch settles before LOAD_LAYOUT
+    setTimeout(() => {
+      handleLoad(snapshot, "all");
+      setParams(rndParams);
+    }, 0);
+  };
 
   const toolHints: Partial<Record<typeof tool, string>> = {
     wall:     "DRAG to draw · SHIFT+DRAG = straight line",
@@ -33,6 +44,7 @@ export default function App() {
         eraserSize={eraserSize} onEraserSizeChange={setEraserSize}
         onToolChange={setTool} onToggle={toggleRunning} onReset={reset}
         onLightModeToggle={toggleLightMode} onParamsChange={setParams} onLoad={handleLoad}
+        onRandomise={handleRandomise}
       />
 
       <main style={{
@@ -85,4 +97,3 @@ export default function App() {
     </div>
   );
 }
-
