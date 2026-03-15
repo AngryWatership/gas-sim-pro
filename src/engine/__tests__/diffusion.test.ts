@@ -83,20 +83,32 @@ describe("stepDiffusion — wind advection", () => {
   });
 
   it("wind shadow mask prevents advection in sheltered cells", () => {
-    const state = makeEmptyState();
-    state.grid[5 * COLS + 2] = 0.8;
-    const shadow = new Uint8Array(ROWS * COLS);
-    for (let c = 3; c < COLS; c++) shadow[5 * COLS + c] = 1;
+    // Gas starts at col 4, shadow covers cols 5-9 on row 5.
+    // We run only 5 ticks so the gas is just beginning to cross the shadow
+    // boundary — the difference between shadowed and unshadowed is clear
+    // and well above floating-point noise.
+    const params = { ...DEFAULT_PARAMS, diffusionRate: 0, windX: 0.5, windY: 0 };
 
-    let withShadow = state;
-    let withoutShadow = state;
-    for (let i = 0; i < 20; i++) {
-      withShadow    = stepDiffusion(withShadow,    { ...DEFAULT_PARAMS, diffusionRate: 0, windX: 0.5, windY: 0 }, shadow);
-      withoutShadow = stepDiffusion(withoutShadow, { ...DEFAULT_PARAMS, diffusionRate: 0, windX: 0.5, windY: 0 });
+    const shadow = new Uint8Array(ROWS * COLS);
+    for (let c = 5; c < COLS; c++) shadow[5 * COLS + c] = 1;
+
+    const base = makeEmptyState();
+    base.grid[5 * COLS + 4] = 0.8;
+
+    let withShadow: SimulationState    = { ...base, grid: new Float32Array(base.grid) };
+    let withoutShadow: SimulationState = { ...base, grid: new Float32Array(base.grid) };
+
+    for (let i = 0; i < 5; i++) {
+      withShadow    = stepDiffusion(withShadow,    params, shadow);
+      withoutShadow = stepDiffusion(withoutShadow, params);
     }
-    const sumShadowed    = Array.from(withShadow.grid.slice(5*COLS+3, 5*COLS+8)).reduce((a,b)=>a+b,0);
-    const sumUnshadowed  = Array.from(withoutShadow.grid.slice(5*COLS+3, 5*COLS+8)).reduce((a,b)=>a+b,0);
-    expect(sumShadowed).toBeLessThan(sumUnshadowed);
+
+    const sumShadowed   = Array.from(withShadow.grid.slice(5*COLS+5, 5*COLS+9)).reduce((a,b)=>a+b,0);
+    const sumUnshadowed = Array.from(withoutShadow.grid.slice(5*COLS+5, 5*COLS+9)).reduce((a,b)=>a+b,0);
+
+    // Unshadowed must have meaningfully more gas past the boundary.
+    // Using a 10% margin so floating-point near-equality cannot cause a false pass.
+    expect(sumUnshadowed).toBeGreaterThan(sumShadowed * 1.1);
   });
 
   it("upwind advection never introduces negative values", () => {
@@ -108,4 +120,3 @@ describe("stepDiffusion — wind advection", () => {
     expect(Math.min(...Array.from(s.grid))).toBeGreaterThanOrEqual(0);
   });
 });
-
