@@ -23,7 +23,7 @@ function downloadNdjson(ndjson: string, configHash: string, batchIndex: number) 
 export default function App() {
   const {
     simState, windShadow,
-    running, tool, setTool, estimation,
+    running, tool, setTool, estimation, inferenceStatus,
     params, setParams, lightMode, toggleLightMode,
     reset, toggleRunning, handleCellsInteract, handleLoad,
   } = useSimulation();
@@ -182,6 +182,29 @@ export default function App() {
             letterSpacing: 1, pointerEvents: "none",
           }}>{label}</div>
         ))}
+
+        {/* Inference status indicator */}
+        <div style={{
+          position: "absolute", top: 14, right: 14,
+          display: "flex", alignItems: "center", gap: 5,
+          fontFamily: "var(--mono)", fontSize: 9,
+          color: "var(--text-dim)", letterSpacing: 1,
+          pointerEvents: "none",
+        }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+            background: inferenceStatus === "online"       ? "#2ecc71"
+                      : inferenceStatus === "offline"      ? "#ffb347"
+                      : inferenceStatus === "loading"      ? "#00e5ff"
+                      : "var(--text-dim)",
+            boxShadow: inferenceStatus === "online" ? "0 0 6px #2ecc71" : "none",
+          }}/>
+          {inferenceStatus === "online"       ? "ML · online"
+         : inferenceStatus === "offline"      ? "ML · offline · triangulation"
+         : inferenceStatus === "loading"      ? "ML · connecting"
+         : inferenceStatus === "unconfigured" ? "triangulation"
+         : ""}
+        </div>
 
         {tool !== "none" && toolHints[tool] && (
           <div style={{

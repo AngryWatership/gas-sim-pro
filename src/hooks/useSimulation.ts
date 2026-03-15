@@ -3,8 +3,7 @@ import type {
   SimulationState, ToolMode, GasLeak, Sensor, SimParams, LayoutSnapshot,
 } from "../engine/types";
 import { DEFAULT_PARAMS } from "../engine/types";
-import { getSensorReadings, estimateLeakPosition } from "../engine/triangulation";
-import type { EstimationResult } from "../engine/triangulation";
+import { useInference } from "./useInference";
 import { stepDiffusion } from "../engine/diffusion";
 import { buildWindShadow } from "../utils/windShadow";
 import type { LoadTarget } from "../utils/layout";
@@ -117,7 +116,7 @@ export function useSimulation() {
   const [simState, dispatch] = useReducer(reducer, undefined, makeInitialState);
   const [running, setRunning] = useState(false);
   const [tool, setTool] = useState<ToolMode>("none");
-  const [estimation, setEstimation] = useState<EstimationResult | null>(null);
+  const { estimation, inferenceStatus, runInference } = useInference();
   const [params, setParams] = useState<SimParams>(DEFAULT_PARAMS);
   const [lightMode, setLightMode] = useState(false);
 
@@ -178,7 +177,6 @@ export function useSimulation() {
     frozen:   false,    // true once a freeze report has been filed this session
   });
   // ── END DIAG ────────────────────────────────────────────────────────────
-  const pendingEstRef  = useRef<EstimationResult | null | undefined>(undefined);
 
   useEffect(() => {
     if (!running) {
@@ -200,11 +198,7 @@ export function useSimulation() {
           dispatch({ type: "SET_GRID", grid });
         });
       }
-      if (pendingEstRef.current !== undefined) {
-        const est = pendingEstRef.current;
-        pendingEstRef.current = undefined;
-        startTransition(() => { setEstimation(est); });
-      }
+      // estimation state now managed by useInference
       // DIAG ────────────────────────────────────────────────────────────────
       if (__DIAG__) {
         const _drainMs = performance.now() - _drain0;
@@ -301,14 +295,10 @@ export function useSimulation() {
         pendingGridRef.current = next.grid;
 
         if (tickCountRef.current % ESTIMATION_EVERY_N_TICKS === 0) {
-          const readings = getSensorReadings(
-            stateRef.current.sensors,
-            next.grid,
-            stateRef.current.dimensions,
-          );
-          pendingEstRef.current = estimateLeakPosition(
-            readings,
-            stateRef.current.gasLeaks[0] ?? null,
+          // Fire-and-forget — useInference debounces and updates estimation state
+          runInference(
+            { ...stateRef.current, grid: next.grid },
+            paramsRef.current,
           );
         }
 
@@ -370,7 +360,7 @@ export function useSimulation() {
   const toggleRunning = useCallback(() => setRunning((r) => !r), []);
   const toggleLightMode = useCallback(() => setLightMode((m) => !m), []);
   const reset = useCallback(() => {
-    setRunning(false); setEstimation(null); dispatch({ type: "RESET" });
+    setRunning(false); dispatch({ type: "RESET" });
   }, []);
 
   // DIAG ──────────────────────────────────────────────────────────────────────
@@ -542,7 +532,7 @@ export function useSimulation() {
 
   return {
     simState, windShadow,
-    running, tool, setTool, estimation,
+    running, tool, setTool, estimation, inferenceStatus,
     params, setParams, lightMode, toggleLightMode,
     reset, toggleRunning, handleCellsInteract, handleLoad,
   };
