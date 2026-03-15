@@ -1,23 +1,24 @@
 /**
  * BatchControls.tsx
- * Batch generation UI — progress bar, row counter, start/stop.
+ * Batch generation UI — progress bar, row counter, start/stop, TRAIN button.
  * Rendered inside ControlPanel below the RANDOM button.
- *
- * Props are passed down from App.tsx which owns the worker lifecycle.
  */
 
+import { useTrainButton } from "../hooks/useTrainButton";
+
 interface Props {
-  isGenerating: boolean;
-  rowsGenerated: number;
-  targetRows: number;
-  layoutsGenerated: number;
-  onStart: () => void;
-  onStop: () => void;
-  onTargetChange: (n: number) => void;
+  isGenerating:      boolean;
+  rowsGenerated:     number;
+  targetRows:        number;
+  layoutsGenerated:  number;
+  onStart:           () => void;
+  onStop:            () => void;
+  onTargetChange:    (n: number) => void;
 }
 
-const COLOR = "#00e5ff";
-const TARGETS = [10_000, 50_000, 100_000, 250_000, 500_000, 1_000_000];
+const GEN_COLOR   = "#00e5ff";
+const TRAIN_COLOR = "#a855f7";
+const TARGETS     = [10_000, 50_000, 100_000, 250_000, 500_000, 1_000_000];
 
 function fmt(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -29,92 +30,186 @@ export default function BatchControls({
   isGenerating, rowsGenerated, targetRows, layoutsGenerated,
   onStart, onStop, onTargetChange,
 }: Props) {
-  const pct = targetRows > 0 ? Math.min(1, rowsGenerated / targetRows) : 0;
+  const pct   = targetRows > 0 ? Math.min(1, rowsGenerated / targetRows) : 0;
+  const train = useTrainButton();
+
+  // ── TRAIN button appearance ───────────────────────────────────────────
+  const trainActive  = train.state === "active";
+  const trainLoading = train.state === "loading";
+
+  const trainLabel = trainLoading
+    ? "⟳ TRAIN …"
+    : train.state === "no_registry"
+      ? "⟳ TRAIN"
+      : trainActive
+        ? "⟳ TRAIN"
+        : "⟳ TRAIN";
+
+  const trainTitle = train.state === "no_registry"
+    ? "Registry not configured — set VITE_GCS_REGISTRY_URL in .env.local once ENV B is set up"
+    : train.state === "current"
+      ? `Model is current · version ${train.modelVersion ?? "?"} · MAE ${train.lastMae?.toFixed(2) ?? "?"}`
+      : train.state === "active"
+        ? "New data available — click to open Colab and retrain"
+        : "Checking registry…";
 
   return (
-    <div style={{
-      padding: "12px 12px 14px",
-      borderBottom: "1px solid var(--border)",
-    }}>
-      <div style={{
-        fontSize: 10, letterSpacing: 2,
-        color: "var(--text-dim)", marginBottom: 8, paddingLeft: 4,
-      }}>
-        BATCH GENERATE
-      </div>
+    <div style={{ borderBottom: "1px solid var(--border)" }}>
 
-      {/* Target row selector */}
-      <div style={{ marginBottom: 8 }}>
+      {/* ── BATCH GENERATE ─────────────────────────────────────────────── */}
+      <div style={{ padding: "12px 12px 14px", borderBottom: "1px solid var(--border)" }}>
         <div style={{
-          fontSize: 9, letterSpacing: 1,
-          color: "var(--text-dim)", marginBottom: 4,
+          fontSize: 10, letterSpacing: 2,
+          color: "var(--text-dim)", marginBottom: 8, paddingLeft: 4,
         }}>
-          TARGET ROWS
+          BATCH GENERATE
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-          {TARGETS.map(t => (
-            <button
-              key={t}
-              onClick={() => onTargetChange(t)}
-              disabled={isGenerating}
-              style={{
-                padding: "3px 7px", borderRadius: 4, fontSize: 10,
-                fontFamily: "var(--mono)", cursor: isGenerating ? "not-allowed" : "pointer",
-                border: `1px solid ${targetRows === t ? COLOR + "80" : "var(--border)"}`,
-                background: targetRows === t ? COLOR + "18" : "transparent",
-                color: targetRows === t ? COLOR : "var(--text-dim)",
-                opacity: isGenerating ? 0.5 : 1,
-              }}
-            >
-              {fmt(t)}
-            </button>
-          ))}
+
+        {/* Target row selector */}
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--text-dim)", marginBottom: 4 }}>
+            TARGET ROWS
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {TARGETS.map(t => (
+              <button
+                key={t}
+                onClick={() => onTargetChange(t)}
+                disabled={isGenerating}
+                style={{
+                  padding: "3px 7px", borderRadius: 4, fontSize: 10,
+                  fontFamily: "var(--mono)",
+                  cursor: isGenerating ? "not-allowed" : "pointer",
+                  border: `1px solid ${targetRows === t ? GEN_COLOR + "80" : "var(--border)"}`,
+                  background: targetRows === t ? GEN_COLOR + "18" : "transparent",
+                  color: targetRows === t ? GEN_COLOR : "var(--text-dim)",
+                  opacity: isGenerating ? 0.5 : 1,
+                }}
+              >
+                {fmt(t)}
+              </button>
+            ))}
+          </div>
         </div>
+
+        {/* Progress bar */}
+        {(isGenerating || rowsGenerated > 0) && (
+          <div style={{ marginBottom: 8 }}>
+            <div style={{
+              height: 4, borderRadius: 2,
+              background: "var(--border)", overflow: "hidden",
+            }}>
+              <div style={{
+                height: "100%", borderRadius: 2,
+                width: `${pct * 100}%`,
+                background: isGenerating
+                  ? `linear-gradient(90deg, ${GEN_COLOR}, #a855f7)`
+                  : "#3dba6e",
+                transition: "width 0.3s ease",
+              }} />
+            </div>
+            <div style={{
+              display: "flex", justifyContent: "space-between",
+              marginTop: 4, fontSize: 9,
+              fontFamily: "var(--mono)", color: "var(--text-dim)",
+            }}>
+              <span>{fmt(rowsGenerated)} / {fmt(targetRows)} rows</span>
+              <span>{layoutsGenerated} layouts</span>
+            </div>
+          </div>
+        )}
+
+        {/* Generate / Stop */}
+        <button
+          onClick={isGenerating ? onStop : onStart}
+          style={{
+            width: "100%", padding: "9px 12px", borderRadius: 6,
+            border: isGenerating
+              ? "1px solid #ff4b6e60"
+              : `1px solid ${GEN_COLOR}60`,
+            background: isGenerating ? "#ff4b6e18" : `${GEN_COLOR}18`,
+            color: isGenerating ? "#ff4b6e" : GEN_COLOR,
+            cursor: "pointer", fontSize: 13,
+            fontFamily: "var(--mono)", letterSpacing: 1,
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+          }}
+        >
+          <span style={{ fontSize: 11 }}>{isGenerating ? "■" : "▶"}</span>
+          {isGenerating ? "STOP" : "GENERATE"}
+        </button>
       </div>
 
-      {/* Progress bar — visible once started */}
-      {(isGenerating || rowsGenerated > 0) && (
-        <div style={{ marginBottom: 8 }}>
-          <div style={{
-            height: 4, borderRadius: 2,
-            background: "var(--border)", overflow: "hidden",
-          }}>
-            <div style={{
-              height: "100%", borderRadius: 2,
-              width: `${pct * 100}%`,
-              background: isGenerating
-                ? `linear-gradient(90deg, ${COLOR}, #a855f7)`
-                : "#3dba6e",
-              transition: "width 0.3s ease",
-            }} />
-          </div>
-          <div style={{
-            display: "flex", justifyContent: "space-between",
-            marginTop: 4, fontSize: 9,
-            fontFamily: "var(--mono)", color: "var(--text-dim)",
-          }}>
-            <span>{fmt(rowsGenerated)} / {fmt(targetRows)} rows</span>
-            <span>{layoutsGenerated} layouts</span>
-          </div>
+      {/* ── TRAIN ──────────────────────────────────────────────────────── */}
+      <div style={{ padding: "12px 12px 14px" }}>
+        <div style={{
+          fontSize: 10, letterSpacing: 2,
+          color: "var(--text-dim)", marginBottom: 8, paddingLeft: 4,
+        }}>
+          MODEL
         </div>
-      )}
 
-      {/* Start / Stop */}
-      <button
-        onClick={isGenerating ? onStop : onStart}
-        style={{
-          width: "100%", padding: "9px 12px", borderRadius: 6,
-          border: isGenerating ? "1px solid #ff4b6e60" : `1px solid ${COLOR}60`,
-          background: isGenerating ? "#ff4b6e18" : `${COLOR}18`,
-          color: isGenerating ? "#ff4b6e" : COLOR,
-          cursor: "pointer", fontSize: 13,
-          fontFamily: "var(--mono)", letterSpacing: 1,
-          display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-        }}
-      >
-        <span style={{ fontSize: 11 }}>{isGenerating ? "■" : "▶"}</span>
-        {isGenerating ? "STOP" : "GENERATE"}
-      </button>
+        {/* Version + MAE — shown when registry is reachable */}
+        {(train.modelVersion || train.lastMae !== null) && (
+          <div style={{
+            fontSize: 9, fontFamily: "var(--mono)",
+            color: "var(--text-dim)", marginBottom: 6,
+            display: "flex", justifyContent: "space-between",
+          }}>
+            <span>{train.modelVersion ?? "—"}</span>
+            {train.lastMae !== null && (
+              <span>MAE {train.lastMae.toFixed(2)}</span>
+            )}
+          </div>
+        )}
+
+        {/* Active state indicator dot */}
+        {trainActive && (
+          <div style={{
+            fontSize: 9, color: TRAIN_COLOR,
+            marginBottom: 6, display: "flex", alignItems: "center", gap: 5,
+          }}>
+            <span style={{
+              width: 6, height: 6, borderRadius: "50%",
+              background: TRAIN_COLOR,
+              boxShadow: `0 0 6px ${TRAIN_COLOR}`,
+              flexShrink: 0,
+            }} />
+            New data available
+          </div>
+        )}
+
+        <button
+          onClick={trainActive ? train.onTrain : undefined}
+          disabled={!trainActive || trainLoading}
+          title={trainTitle}
+          style={{
+            width: "100%", padding: "9px 12px", borderRadius: 6,
+            border: trainActive
+              ? `1px solid ${TRAIN_COLOR}60`
+              : "1px solid var(--border)",
+            background: trainActive ? `${TRAIN_COLOR}15` : "transparent",
+            color: trainActive ? TRAIN_COLOR : "var(--text-dim)",
+            cursor: trainActive ? "pointer" : "not-allowed",
+            fontSize: 13, fontFamily: "var(--mono)", letterSpacing: 1,
+            opacity: trainLoading ? 0.5 : 1,
+            transition: "all 0.2s ease",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+          }}
+        >
+          {trainLabel}
+        </button>
+
+        {/* No registry hint */}
+        {train.state === "no_registry" && (
+          <div style={{
+            marginTop: 6, fontSize: 9,
+            color: "var(--text-dim)", lineHeight: 1.4,
+          }}>
+            Set <code style={{ fontFamily: "var(--mono)" }}>VITE_GCS_REGISTRY_URL</code> in{" "}
+            <code style={{ fontFamily: "var(--mono)" }}>.env.local</code> after ENV B is ready.
+          </div>
+        )}
+      </div>
     </div>
   );
 }
