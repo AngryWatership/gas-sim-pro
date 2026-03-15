@@ -1,10 +1,12 @@
-import { useState } from "react";
-import SimulationCanvas from "./components/SimulationCanvas";
+import { useState, useCallback } from "react";
 import ControlPanel from "./components/ControlPanel";
 import type { EraserSize } from "./components/ControlPanel";
 import SensorStats from "./components/SensorStats";
+import SimulationCanvas from "./components/SimulationCanvas";
 import { useSimulation } from "./hooks/useSimulation";
 import { generateRandomLayout } from "./utils/randomLayout";
+import { defaultConfig } from "./utils/generatorConfig";
+import type { GeneratorConfig } from "./utils/generatorConfig";
 
 export default function App() {
   const {
@@ -16,16 +18,26 @@ export default function App() {
 
   const [showShadow, setShowShadow] = useState(false);
   const [eraserSize, setEraserSize] = useState<EraserSize>({ w: 1, h: 1 });
+  const [genConfig, setGenConfig] = useState<GeneratorConfig>(defaultConfig);
 
-  const handleRandomise = () => {
-    const { snapshot, params: rndParams } = generateRandomLayout();
-    reset();                          // clears grid + stops simulation
-    // Use a microtask so the RESET dispatch settles before LOAD_LAYOUT
+  const handleRandomise = useCallback(() => {
+    const { snapshot, params: rndParams } = generateRandomLayout(
+      undefined,
+      genConfig,
+      {
+        walls:   [...simState.blockedCells].reduce<number[]>((a, v, i) => (v ? [...a, i] : a), []),
+        doors:   [...simState.doorCells].reduce<number[]>((a, v, i) => (v ? [...a, i] : a), []),
+        leaks:   simState.gasLeaks ?? [],
+        sensors: simState.sensors,
+        params,
+      },
+    );
+    reset();
     setTimeout(() => {
       handleLoad(snapshot, "all");
       setParams(rndParams);
     }, 0);
-  };
+  }, [genConfig, simState, params, reset, handleLoad, setParams]);
 
   const toolHints: Partial<Record<typeof tool, string>> = {
     wall:     "DRAG to draw · SHIFT+DRAG = straight line",
@@ -45,6 +57,7 @@ export default function App() {
         onToolChange={setTool} onToggle={toggleRunning} onReset={reset}
         onLightModeToggle={toggleLightMode} onParamsChange={setParams} onLoad={handleLoad}
         onRandomise={handleRandomise}
+        onConfigChange={setGenConfig}
       />
 
       <main style={{

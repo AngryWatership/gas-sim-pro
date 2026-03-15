@@ -1,6 +1,8 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useState, useCallback } from "react";
 import type { ToolMode, SimParams, SimulationState, LayoutSnapshot } from "../engine/types";
 import type { LoadTarget } from "../utils/layout";
+import type { GeneratorConfig } from "../utils/generatorConfig";
+import { defaultConfig } from "../utils/generatorConfig";
 import ParamsPanel from "./ParamsPanel";
 import SaveLoadPanel from "./SaveLoadPanel";
 
@@ -23,6 +25,7 @@ interface Props {
   onParamsChange: (p: SimParams) => void;
   onLoad: (snapshot: LayoutSnapshot, target: LoadTarget) => void;
   onRandomise: () => void;
+  onConfigChange?: (cfg: GeneratorConfig) => void;
 }
 
 interface ToolBtn {
@@ -147,13 +150,236 @@ function Stepper({
   );
 }
 
+// ── Range row: label + slider + current value ─────────────────────────────
+function RangeRow({
+  label, min, max, value, onChange, color, disabled,
+}: {
+  label: string;
+  min: number;
+  max: number;
+  value: number;
+  onChange: (v: number) => void;
+  color: string;
+  disabled: boolean;
+}) {
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 6,
+      opacity: disabled ? 0.35 : 1,
+      pointerEvents: disabled ? "none" : "auto",
+    }}>
+      <span style={{ fontSize: 10, color: "var(--text-dim)", width: 28, flexShrink: 0 }}>{label}</span>
+      <input
+        type="range" min={min} max={max} value={value}
+        onChange={e => onChange(Number(e.target.value))}
+        style={{ flex: 1, accentColor: color, cursor: "pointer" }}
+      />
+      <span style={{
+        fontSize: 10, fontFamily: "var(--mono)", color,
+        width: 22, textAlign: "right", flexShrink: 0,
+      }}>{value}</span>
+    </div>
+  );
+}
+
+// ── Toggle row: dimension checkbox + label ────────────────────────────────
+function DimToggle({
+  label, checked, onChange, color,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  color: string;
+}) {
+  return (
+    <label style={{
+      display: "flex", alignItems: "center", gap: 7,
+      cursor: "pointer", userSelect: "none",
+      fontSize: 11, color: checked ? color : "var(--text-dim)",
+      transition: "color 0.15s",
+    }}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={e => onChange(e.target.checked)}
+        style={{ accentColor: color, cursor: "pointer", width: 12, height: 12 }}
+      />
+      {label}
+    </label>
+  );
+}
+
+// ── Generator config panel ────────────────────────────────────────────────
+function GeneratorConfigPanel({
+  config, onChange,
+}: {
+  config: GeneratorConfig;
+  onChange: (cfg: GeneratorConfig) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const accent = "#a855f7";
+  const set = useCallback(
+    (patch: Partial<GeneratorConfig>) => onChange({ ...config, ...patch }),
+    [config, onChange],
+  );
+
+  return (
+    <div style={{ borderBottom: "1px solid var(--border)" }}>
+      {/* Collapsible header */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          width: "100%", padding: "11px 12px",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          background: "transparent", border: "none",
+          cursor: "pointer", color: "var(--text-dim)",
+          fontSize: 10, letterSpacing: 2, fontFamily: "var(--mono)",
+        }}
+      >
+        <span>GENERATOR CONFIG</span>
+        <span style={{
+          fontSize: 9, color: accent,
+          transform: open ? "rotate(180deg)" : "rotate(0deg)",
+          transition: "transform 0.2s",
+          display: "inline-block",
+        }}>▼</span>
+      </button>
+
+      {open && (
+        <div style={{ padding: "0 12px 14px", display: "flex", flexDirection: "column", gap: 12 }}>
+
+          {/* Walls */}
+          <div>
+            <DimToggle
+              label="Randomise walls"
+              checked={config.randomiseWalls}
+              onChange={v => set({ randomiseWalls: v })}
+              color={accent}
+            />
+            <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+              <RangeRow label="min" min={1} max={config.wallCountMax} value={config.wallCountMin}
+                onChange={v => set({ wallCountMin: v })} color={accent} disabled={!config.randomiseWalls} />
+              <RangeRow label="max" min={config.wallCountMin} max={10} value={config.wallCountMax}
+                onChange={v => set({ wallCountMax: v })} color={accent} disabled={!config.randomiseWalls} />
+              <RangeRow label="len" min={5} max={config.wallLengthMax} value={config.wallLengthMin}
+                onChange={v => set({ wallLengthMin: v })} color={accent} disabled={!config.randomiseWalls} />
+              <RangeRow label="len↑" min={config.wallLengthMin} max={80} value={config.wallLengthMax}
+                onChange={v => set({ wallLengthMax: v })} color={accent} disabled={!config.randomiseWalls} />
+            </div>
+          </div>
+
+          <div style={{ height: 1, background: "var(--border)" }} />
+
+          {/* Doors */}
+          <div>
+            <DimToggle
+              label="Randomise doors"
+              checked={config.randomiseDoors}
+              onChange={v => set({ randomiseDoors: v })}
+              color="#3fa8d8"
+            />
+            <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+              <RangeRow label="min" min={0} max={config.doorCountMax} value={config.doorCountMin}
+                onChange={v => set({ doorCountMin: v })} color="#3fa8d8" disabled={!config.randomiseDoors} />
+              <RangeRow label="max" min={config.doorCountMin} max={8} value={config.doorCountMax}
+                onChange={v => set({ doorCountMax: v })} color="#3fa8d8" disabled={!config.randomiseDoors} />
+              <RangeRow label="w↑" min={1} max={12} value={config.doorWidthMax}
+                onChange={v => set({ doorWidthMax: v })} color="#3fa8d8" disabled={!config.randomiseDoors} />
+            </div>
+          </div>
+
+          <div style={{ height: 1, background: "var(--border)" }} />
+
+          {/* Leaks */}
+          <div>
+            <DimToggle
+              label="Randomise leaks"
+              checked={config.randomiseLeaks}
+              onChange={v => set({ randomiseLeaks: v })}
+              color="#ff4b6e"
+            />
+            <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+              <RangeRow label="min" min={1} max={config.leakCountMax} value={config.leakCountMin}
+                onChange={v => set({ leakCountMin: v })} color="#ff4b6e" disabled={!config.randomiseLeaks} />
+              <RangeRow label="max" min={config.leakCountMin} max={10} value={config.leakCountMax}
+                onChange={v => set({ leakCountMax: v })} color="#ff4b6e" disabled={!config.randomiseLeaks} />
+            </div>
+          </div>
+
+          <div style={{ height: 1, background: "var(--border)" }} />
+
+          {/* Sensors */}
+          <div>
+            <DimToggle
+              label="Randomise sensors"
+              checked={config.randomiseSensors}
+              onChange={v => set({ randomiseSensors: v })}
+              color="#ffdd00"
+            />
+            <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+              <RangeRow label="min" min={1} max={config.sensorCountMax} value={config.sensorCountMin}
+                onChange={v => set({ sensorCountMin: v })} color="#ffdd00" disabled={!config.randomiseSensors} />
+              <RangeRow label="max" min={config.sensorCountMin} max={40} value={config.sensorCountMax}
+                onChange={v => set({ sensorCountMax: v })} color="#ffdd00" disabled={!config.randomiseSensors} />
+            </div>
+          </div>
+
+          <div style={{ height: 1, background: "var(--border)" }} />
+
+          {/* Physics */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <DimToggle label="Randomise wind"      checked={config.randomiseWind}      onChange={v => set({ randomiseWind: v })}      color="#2ecc71" />
+            <DimToggle label="Randomise diffusion" checked={config.randomiseDiffusion} onChange={v => set({ randomiseDiffusion: v })} color="#2ecc71" />
+            <DimToggle label="Randomise decay"     checked={config.randomiseDecay}     onChange={v => set({ randomiseDecay: v })}     color="#2ecc71" />
+            <DimToggle label="Randomise injection" checked={config.randomiseInjection} onChange={v => set({ randomiseInjection: v })} color="#2ecc71" />
+          </div>
+
+          <div style={{ height: 1, background: "var(--border)" }} />
+
+          {/* Recording */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: 10, letterSpacing: 1, color: "var(--text-dim)" }}>RECORDING</span>
+            <RangeRow label="warm" min={50} max={500} value={config.warmUpTicks}
+              onChange={v => set({ warmUpTicks: v })} color="#888" disabled={false} />
+            <RangeRow label="rec" min={10} max={300} value={config.recordTicks}
+              onChange={v => set({ recordTicks: v })} color="#888" disabled={false} />
+            <RangeRow label="÷" min={1} max={20} value={config.recordEvery}
+              onChange={v => set({ recordEvery: v })} color="#888" disabled={false} />
+          </div>
+
+          {/* Reset to defaults */}
+          <button
+            onClick={() => onChange(defaultConfig)}
+            style={{
+              padding: "6px 0", borderRadius: 4,
+              border: "1px solid var(--border)", background: "transparent",
+              color: "var(--text-dim)", cursor: "pointer",
+              fontSize: 10, fontFamily: "var(--mono)", letterSpacing: 1,
+            }}
+          >
+            RESET TO DEFAULTS
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────
 export default function ControlPanel({
   tool, running, lightMode, params, simState,
   showShadow, eraserSize, onEraserSizeChange,
   onShowShadowToggle, onToolChange, onToggle, onReset,
   onLightModeToggle, onParamsChange, onLoad, onRandomise,
+  onConfigChange,
 }: Props) {
   const eraserColor = "#a0a0c0";
+  const [genConfig, setGenConfig] = useState<GeneratorConfig>(defaultConfig);
+
+  const handleConfigChange = useCallback((cfg: GeneratorConfig) => {
+    setGenConfig(cfg);
+    onConfigChange?.(cfg);
+  }, [onConfigChange]);
 
   return (
     <aside style={{
@@ -200,7 +426,6 @@ export default function ControlPanel({
           ))}
         </div>
 
-        {/* Eraser size controls — shown only when eraser is active */}
         {tool === "eraser" && (
           <div style={{
             marginTop: 8, padding: "10px 10px 10px",
@@ -305,6 +530,9 @@ export default function ControlPanel({
           </button>
         </div>
       </div>
+
+      {/* Generator config — collapsible */}
+      <GeneratorConfigPanel config={genConfig} onChange={handleConfigChange} />
 
       {/* Parameters */}
       <ParamsPanel params={params} showShadow={showShadow} onShowShadowToggle={onShowShadowToggle} onChange={onParamsChange} />
