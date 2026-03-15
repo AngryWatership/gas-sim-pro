@@ -1,12 +1,24 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import ControlPanel from "./components/ControlPanel";
 import type { EraserSize } from "./components/ControlPanel";
+import BatchControls from "./components/BatchControls";
 import SensorStats from "./components/SensorStats";
 import SimulationCanvas from "./components/SimulationCanvas";
 import { useSimulation } from "./hooks/useSimulation";
 import { generateRandomLayout } from "./utils/randomLayout";
 import { defaultConfig } from "./utils/generatorConfig";
 import type { GeneratorConfig } from "./utils/generatorConfig";
+
+// ── NDJSON download helper ────────────────────────────────────────────────
+function downloadNdjson(ndjson: string, configHash: string, batchIndex: number) {
+  const ts   = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const name = `synthetic-${configHash}-${ts}-${batchIndex}.ndjson`;
+  const blob = new Blob([ndjson], { type: "application/x-ndjson" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url; a.download = name; a.click();
+  URL.revokeObjectURL(url);
+}
 
 export default function App() {
   const {
@@ -16,10 +28,20 @@ export default function App() {
     reset, toggleRunning, handleCellsInteract, handleLoad,
   } = useSimulation();
 
-  const [showShadow, setShowShadow] = useState(false);
-  const [eraserSize, setEraserSize] = useState<EraserSize>({ w: 1, h: 1 });
-  const [genConfig, setGenConfig] = useState<GeneratorConfig>(defaultConfig);
+  const [showShadow,   setShowShadow]   = useState(false);
+  const [eraserSize,   setEraserSize]   = useState<EraserSize>({ w: 1, h: 1 });
+  const [genConfig,    setGenConfig]    = useState<GeneratorConfig>(defaultConfig);
 
+  // ── Batch generation state ───────────────────────────────────────────────
+  const [isGenerating,       setIsGenerating]       = useState(false);
+  const [rowsGenerated,      setRowsGenerated]       = useState(0);
+  const [targetRows,         setTargetRows]          = useState(50_000);
+  const [layoutsGenerated,   setLayoutsGenerated]    = useState(0);
+  const workerRef  = useRef<Worker | null>(null);
+  const batchIndex = useRef(0);
+  const configHash = useRef("xxxxxxxx");
+
+  // ── RANDOM button ─────────────────────────────────────────────────────────
   const handleRandomise = useCallback(() => {
     const { snapshot, params: rndParams } = generateRandomLayout(
       undefined,
@@ -39,6 +61,80 @@ export default function App() {
     }, 0);
   }, [genConfig, simState, params, reset, handleLoad, setParams]);
 
+  // ── Batch generation ──────────────────────────────────────────────────────
+  const handleStartGenerate = useCallback(() => {
+    if (isGenerating) return;
+
+    // Compute config_hash for filename — mirrors computeConfigHash in randomLayout
+    const key = [
+      genConfig.randomiseWalls     ? "W" : "w",
+      genConfig.randomiseDoors     ? "D" : "d",
+      genConfig.randomiseLeaks     ? "L" : "l",
+      genConfig.randomiseSensors   ? "S" : "s",
+      genConfig.randomiseWind      ? "N" : "n",
+      genConfig.randomiseDiffusion ? "F" : "f",
+      genConfig.randomiseDecay     ? "C" : "c",
+      genConfig.randomiseInjection ? "I" : "i",
+    ].join("");
+    let h = 5381;
+    for (let i = 0; i < key.length; i++) {
+      h = ((h << 5) + h) ^ key.charCodeAt(i);
+      h = h >>> 0;
+    }
+    configHash.current = h.toString(16).padStart(6, "0").slice(0, 6);
+
+    setRowsGenerated(0);
+    setLayoutsGenerated(0);
+    batchIndex.current = 0;
+    setIsGenerating(true);
+
+    const worker = new Worker(
+      new URL("./workers/generator.worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    workerRef.current = worker;
+
+    worker.onmessage = (e: MessageEvent) => {
+      const msg = e.data;
+
+      if (msg.type === "progress") {
+        setRowsGenerated(msg.rowsGenerated);
+        setLayoutsGenerated(msg.layoutsGenerated);
+      }
+
+      if (msg.type === "flush") {
+        setRowsGenerated(r => r + msg.rowCount);
+        batchIndex.current++;
+        downloadNdjson(msg.ndjson, configHash.current, batchIndex.current);
+      }
+
+      if (msg.type === "done") {
+        setRowsGenerated(msg.totalRows);
+        setLayoutsGenerated(msg.totalLayouts);
+        setIsGenerating(false);
+        worker.terminate();
+        workerRef.current = null;
+        // Store last export timestamp for TRAIN button logic
+        localStorage.setItem("lastExportTimestamp", new Date().toISOString());
+      }
+
+      if (msg.type === "error") {
+        console.error("Generator worker error:", msg.message);
+        setIsGenerating(false);
+        worker.terminate();
+        workerRef.current = null;
+      }
+    };
+
+    worker.postMessage({ type: "start", config: genConfig, targetRows });
+  }, [isGenerating, genConfig, targetRows]);
+
+  const handleStopGenerate = useCallback(() => {
+    workerRef.current?.postMessage({ type: "stop" });
+    setIsGenerating(false);
+  }, []);
+
+  // ── Tool hints ────────────────────────────────────────────────────────────
   const toolHints: Partial<Record<typeof tool, string>> = {
     wall:     "DRAG to draw · SHIFT+DRAG = straight line",
     door:     "CLICK near walls to open passages (AoE)",
@@ -52,13 +148,24 @@ export default function App() {
       <ControlPanel
         tool={tool} running={running} lightMode={lightMode}
         params={params} simState={simState}
-        showShadow={showShadow} onShowShadowToggle={() => setShowShadow((s) => !s)}
+        showShadow={showShadow} onShowShadowToggle={() => setShowShadow(s => !s)}
         eraserSize={eraserSize} onEraserSizeChange={setEraserSize}
         onToolChange={setTool} onToggle={toggleRunning} onReset={reset}
         onLightModeToggle={toggleLightMode} onParamsChange={setParams} onLoad={handleLoad}
         onRandomise={handleRandomise}
         onConfigChange={setGenConfig}
-      />
+      >
+        {/* BatchControls rendered as a child so it slots into the sidebar */}
+        <BatchControls
+          isGenerating={isGenerating}
+          rowsGenerated={rowsGenerated}
+          targetRows={targetRows}
+          layoutsGenerated={layoutsGenerated}
+          onStart={handleStartGenerate}
+          onStop={handleStopGenerate}
+          onTargetChange={setTargetRows}
+        />
+      </ControlPanel>
 
       <main style={{
         flex: 1, display: "flex", alignItems: "center", justifyContent: "center",

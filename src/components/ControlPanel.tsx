@@ -531,6 +531,9 @@ export default function ControlPanel({
         </div>
       </div>
 
+      {/* Batch controls slot — rendered from App.tsx */}
+      {children}
+
       {/* Generator config — collapsible */}
       <GeneratorConfigPanel config={genConfig} onChange={handleConfigChange} />
 
