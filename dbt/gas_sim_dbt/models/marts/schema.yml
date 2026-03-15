@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: ml_export
+    description: "Final ML-ready flat table — no nulls in any column"
+    columns:
+      - name: leak_row
+        tests: [not_null]
+      - name: leak_col
+        tests: [not_null]
+      - name: sensor_delta
+        tests: [not_null]
+      - name: centroid_row
+        tests: [not_null]
+      - name: centroid_col
+        tests: [not_null]
+      - name: wind_angle
+        tests: [not_null]
+      - name: wind_magnitude
+        tests: [not_null]

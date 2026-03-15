@@ -7,14 +7,12 @@ with base as (
     select * from {{ ref('stg_simulation_ticks') }}
 ),
 
--- Aggregate per tick across all sensors
 aggregated as (
     select
         source,
         seed,
         layout_id,
         config_hash,
-        locked_dimensions,
         tick,
         wind_x,
         wind_y,
@@ -22,44 +20,51 @@ aggregated as (
         decay_factor,
         leak_injection,
         uploaded_at,
-        leaks_arr,
+
+        -- Array/JSON columns cannot be in GROUP BY — use ANY_VALUE
+        any_value(locked_dimensions)  as locked_dimensions,
+        any_value(leaks_arr)          as leaks_arr,
+        any_value(walls_arr)          as walls_arr,
+        any_value(doors_arr)          as doors_arr,
 
         -- Sensor aggregates
-        max(sensor_reading)  - min(sensor_reading)           as sensor_delta,
-        avg(sensor_reading)                                   as sensor_mean,
-        stddev_samp(sensor_reading)                           as reading_variance,
+        max(sensor_reading) - min(sensor_reading)            as sensor_delta,
+        avg(sensor_reading)                                  as sensor_mean,
+        stddev_samp(sensor_reading)                          as reading_variance,
 
         -- Weighted centroid by reading value
         safe_divide(
             sum(sensor_row * sensor_reading),
             nullif(sum(sensor_reading), 0)
-        )                                                     as centroid_row,
+        )                                                    as centroid_row,
 
         safe_divide(
             sum(sensor_col * sensor_reading),
             nullif(sum(sensor_reading), 0)
-        )                                                     as centroid_col,
+        )                                                    as centroid_col,
 
         -- Coverage: fraction of sensors with non-trivial reading
         safe_divide(
             countif(sensor_reading > 0.01),
             count(*)
-        )                                                     as coverage_ratio,
+        )                                                    as coverage_ratio,
 
-        count(*)                                              as sensor_count
+        count(*)                                             as sensor_count
 
     from base
-    group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14
+    group by
+        source, seed, layout_id, config_hash, tick,
+        wind_x, wind_y, diffusion_rate, decay_factor,
+        leak_injection, uploaded_at
 ),
 
--- Extract leak position from JSON (Phase 1: first leak only)
 with_targets as (
     select
         a.*,
 
         -- Wind derived features
-        atan2(a.wind_y, a.wind_x)                            as wind_angle,
-        sqrt(a.wind_x * a.wind_x + a.wind_y * a.wind_y)     as wind_magnitude,
+        atan2(a.wind_y, a.wind_x)                           as wind_angle,
+        sqrt(a.wind_x * a.wind_x + a.wind_y * a.wind_y)    as wind_magnitude,
 
         -- Distance of centroid from nearest grid boundary (100x100 grid)
         least(
@@ -67,16 +72,17 @@ with_targets as (
             100 - a.centroid_row,
             a.centroid_col,
             100 - a.centroid_col
-        )                                                     as distance_to_boundary,
+        )                                                    as distance_to_boundary,
 
         -- Targets — first leak only (Phase 1)
+        -- leaks_arr is already ARRAY<JSON> from staging — index directly
         cast(json_extract_scalar(
-            json_extract_array(a.leaks_arr)[offset(0)], '$.row'
-        ) as float64)                                         as leak_row,
+            a.leaks_arr[offset(0)], '$.row'
+        ) as float64)                                        as leak_row,
 
         cast(json_extract_scalar(
-            json_extract_array(a.leaks_arr)[offset(0)], '$.col'
-        ) as float64)                                         as leak_col
+            a.leaks_arr[offset(0)], '$.col'
+        ) as float64)                                        as leak_col
 
     from aggregated a
 )
@@ -88,7 +94,6 @@ select
     config_hash,
     locked_dimensions,
     tick,
-    -- Features
     sensor_delta,
     sensor_mean,
     reading_variance,
@@ -104,16 +109,12 @@ select
     decay_factor,
     leak_injection,
     sensor_count,
-    -- Targets
     leak_row,
     leak_col,
     uploaded_at
 from with_targets
 where
-    -- Only single-leak records for Phase 1
-    json_array_length(leaks_arr) = 1
-    -- Require non-null targets
+    array_length(leaks_arr) = 1
     and leak_row is not null
     and leak_col is not null
-    -- Require meaningful sensor signal
     and sensor_delta > 0

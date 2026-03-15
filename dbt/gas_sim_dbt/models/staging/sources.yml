@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: raw
+    project: "{{ env_var('DBT_PROJECT_ID') }}"
+    dataset: raw
+    tables:
+      - name: simulation_ticks
+        description: "Raw NDJSON records ingested by the Cloud Function"

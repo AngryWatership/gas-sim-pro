@@ -1,0 +1,16 @@
+version: 2
+
+models:
+  - name: fct_training_examples
+    description: "One training example per (layout_id, tick) — engineered features + targets"
+    columns:
+      - name: layout_id
+        tests: [not_null]
+      - name: leak_row
+        tests: [not_null]
+      - name: leak_col
+        tests: [not_null]
+      - name: sensor_delta
+        tests: [not_null]
+      - name: wind_angle
+        tests: [not_null]
