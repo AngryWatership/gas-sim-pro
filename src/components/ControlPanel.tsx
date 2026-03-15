@@ -26,6 +26,7 @@ interface Props {
   onLoad: (snapshot: LayoutSnapshot, target: LoadTarget) => void;
   onRandomise: () => void;
   onConfigChange?: (cfg: GeneratorConfig) => void;
+  children?: ReactNode;
 }
 
 interface ToolBtn {
@@ -372,6 +373,7 @@ export default function ControlPanel({
   onShowShadowToggle, onToolChange, onToggle, onReset,
   onLightModeToggle, onParamsChange, onLoad, onRandomise,
   onConfigChange,
+  children,
 }: Props) {
   const eraserColor = "#a0a0c0";
   const [genConfig, setGenConfig] = useState<GeneratorConfig>(defaultConfig);

@@ -17,7 +17,6 @@
 
 import { generateRandomLayout } from "../utils/randomLayout";
 import { stepDiffusion } from "../engine/diffusion";
-import { DEFAULT_PARAMS } from "../engine/types";
 import type { SimulationState } from "../engine/types";
 import type { GeneratorConfig } from "../utils/generatorConfig";
 
