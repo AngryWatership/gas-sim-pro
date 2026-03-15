@@ -1,23 +1,15 @@
-/**
- * randomLayout.ts
- *
- * Generates a randomised but physically plausible simulation layout.
- * Pure function — no React, no side effects, fully deterministic given a seed.
- *
- * Returns a LayoutSnapshot (compatible with the existing LOAD_LAYOUT reducer)
- * plus a SimParams set. The caller resets the grid then loads both.
- *
- * Generation order (fixed outer → randomised inner):
- *   walls → leaks → doors → sensors → wind + physics params
- */
-
 import type { LayoutSnapshot, SimParams, GasLeak, Sensor } from "../engine/types";
+import {
+  type GeneratorConfig,
+  defaultConfig,
+  lockedConfig,
+} from "./generatorConfig";
 
 const ROWS = 100;
 const COLS = 100;
-const BOUNDARY = 5; // min distance from grid edge for all elements
+const BOUNDARY = 5;
 
-// ── Seeded PRNG (Mulberry32) ───────────────────────────────────────────────
+// ── Seeded PRNG (Mulberry32) ──────────────────────────────────────────────
 function makePrng(seed: number) {
   let s = seed >>> 0;
   return {
@@ -38,6 +30,28 @@ function makePrng(seed: number) {
 
 type Rng = ReturnType<typeof makePrng>;
 
+// ── config_hash ───────────────────────────────────────────────────────────
+// Stable 6-char hex hash of which dimensions are randomised.
+// Same config always produces the same hash — used for BigQuery filtering.
+function computeConfigHash(cfg: GeneratorConfig): string {
+  const key = [
+    cfg.randomiseWalls     ? "W" : "w",
+    cfg.randomiseDoors     ? "D" : "d",
+    cfg.randomiseLeaks     ? "L" : "l",
+    cfg.randomiseSensors   ? "S" : "s",
+    cfg.randomiseWind      ? "N" : "n",
+    cfg.randomiseDiffusion ? "F" : "f",
+    cfg.randomiseDecay     ? "C" : "c",
+    cfg.randomiseInjection ? "I" : "i",
+  ].join("");
+  let h = 5381;
+  for (let i = 0; i < key.length; i++) {
+    h = ((h << 5) + h) ^ key.charCodeAt(i);
+    h = h >>> 0;
+  }
+  return h.toString(16).padStart(6, "0").slice(0, 6);
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 function idx(r: number, c: number): number { return r * COLS + c; }
 
@@ -45,7 +59,6 @@ function cellsOfSegment(
   r0: number, c0: number,
   r1: number, c1: number,
 ): Array<[number, number]> {
-  // Bresenham line
   const cells: Array<[number, number]> = [];
   let r = r0, c = c0;
   const dr = Math.abs(r1 - r0), dc = Math.abs(c1 - c0);
@@ -63,44 +76,47 @@ function cellsOfSegment(
 
 // ── Wall generation ───────────────────────────────────────────────────────
 interface WallSegment {
-  cells: Array<[number, number]>;       // ordered list of cells
+  cells: Array<[number, number]>;
   isHoriz: boolean;
 }
 
-function generateWalls(rng: Rng): { blocked: Set<number>; segments: WallSegment[] } {
+function generateWalls(
+  rng: Rng,
+  cfg: GeneratorConfig,
+  fixedWalls?: number[],
+): { blocked: Set<number>; segments: WallSegment[] } {
+  if (!cfg.randomiseWalls && fixedWalls) {
+    const blocked = new Set(fixedWalls);
+    const cells = fixedWalls.map(i => [Math.floor(i / COLS), i % COLS] as [number, number]);
+    return { blocked, segments: [{ cells, isHoriz: true }] };
+  }
+
   const blocked = new Set<number>();
   const segments: WallSegment[] = [];
-  const count = rng.int(2, 10);
-
+  const count = rng.int(cfg.wallCountMin, cfg.wallCountMax);
   const MAX_ATTEMPTS = 60;
 
   for (let w = 0; w < count; w++) {
     let placed = false;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const isHoriz = rng.next() > 0.5;
-      const length  = rng.int(10, 28);
+      const length  = rng.int(cfg.wallLengthMin, cfg.wallLengthMax);
 
       let r0: number, c0: number, r1: number, c1: number;
-
       if (isHoriz) {
         r0 = rng.int(BOUNDARY, ROWS - BOUNDARY - 1);
         c0 = rng.int(BOUNDARY, COLS - BOUNDARY - length);
-        r1 = r0;
-        c1 = c0 + length - 1;
+        r1 = r0; c1 = c0 + length - 1;
       } else {
         r0 = rng.int(BOUNDARY, ROWS - BOUNDARY - length);
         c0 = rng.int(BOUNDARY, COLS - BOUNDARY - 1);
-        r1 = r0 + length - 1;
-        c1 = c0;
+        r1 = r0 + length - 1; c1 = c0;
       }
 
       const cells = cellsOfSegment(r0, c0, r1, c1);
-
-      // Reject if > 2 cells overlap with existing walls (no heavy crossings)
       const overlaps = cells.filter(([r, c]) => blocked.has(idx(r, c))).length;
       if (overlaps > 2) continue;
 
-      // Reject if any cell is within 3 cells of another wall not in this segment
       const tooClose = cells.some(([r, c]) => {
         for (let dr = -2; dr <= 2; dr++)
           for (let dc = -2; dc <= 2; dc++) {
@@ -118,11 +134,11 @@ function generateWalls(rng: Rng): { blocked: Set<number>; segments: WallSegment[
       placed = true;
       break;
     }
+
     if (!placed) {
-      // Fallback: place a simple guaranteed wall
       const r0 = rng.int(BOUNDARY + 5, ROWS - BOUNDARY - 15);
       const c0 = rng.int(BOUNDARY + 5, COLS - BOUNDARY - 15);
-      const len = rng.int(10, 15);
+      const len = rng.int(cfg.wallLengthMin, Math.min(cfg.wallLengthMin + 10, cfg.wallLengthMax));
       const cells = cellsOfSegment(r0, c0, r0, c0 + len - 1);
       cells.forEach(([r, c]) => {
         if (r >= 0 && r < ROWS && c >= 0 && c < COLS) blocked.add(idx(r, c));
@@ -137,19 +153,26 @@ function generateWalls(rng: Rng): { blocked: Set<number>; segments: WallSegment[
 // ── Door generation ───────────────────────────────────────────────────────
 function generateDoors(
   rng: Rng,
+  cfg: GeneratorConfig,
   segments: WallSegment[],
   blocked: Set<number>,
+  fixedDoors?: number[],
 ): { doors: Set<number>; blocked: Set<number> } {
-  const doors = new Set<number>();
-  const count = rng.int(1, 3);
+  if (!cfg.randomiseDoors && fixedDoors) {
+    const doors = new Set(fixedDoors);
+    const b = new Set(blocked);
+    fixedDoors.forEach(i => b.delete(i));
+    return { doors, blocked: b };
+  }
 
-  // Pick `count` random segments (with replacement allowed) to put doors on
+  const doors = new Set<number>();
+  const count = rng.int(cfg.doorCountMin, cfg.doorCountMax);
+
   for (let d = 0; d < count; d++) {
     const seg = rng.pick(segments);
     if (seg.cells.length < 4) continue;
 
-    const doorWidth = rng.int(3, 6);
-    // Pick a start position that is not at the very ends of the segment
+    const doorWidth = rng.int(cfg.doorWidthMin, cfg.doorWidthMax);
     const maxStart = seg.cells.length - doorWidth - 1;
     if (maxStart < 2) continue;
     const start = rng.int(1, maxStart);
@@ -168,10 +191,14 @@ function generateDoors(
 // ── Leak generation ───────────────────────────────────────────────────────
 function generateLeaks(
   rng: Rng,
+  cfg: GeneratorConfig,
   blocked: Set<number>,
   doors: Set<number>,
+  fixedLeaks?: GasLeak[],
 ): GasLeak[] {
-  const count = rng.int(1, 8);
+  if (!cfg.randomiseLeaks && fixedLeaks) return fixedLeaks;
+
+  const count = rng.int(cfg.leakCountMin, cfg.leakCountMax);
   const leaks: GasLeak[] = [];
   const MIN_APART = 8;
   const MAX_ATTEMPTS = 80;
@@ -183,7 +210,6 @@ function generateLeaks(
       const i_ = idx(r, c);
 
       if (blocked.has(i_) || doors.has(i_)) continue;
-
       const tooClose = leaks.some(
         (lk) => Math.abs(lk.row - r) + Math.abs(lk.col - c) < MIN_APART,
       );
@@ -200,21 +226,24 @@ function generateLeaks(
 // ── Sensor generation ─────────────────────────────────────────────────────
 function generateSensors(
   rng: Rng,
+  cfg: GeneratorConfig,
   blocked: Set<number>,
   doors: Set<number>,
   leaks: GasLeak[],
+  fixedSensors?: Sensor[],
 ): Sensor[] {
-  const count = rng.int(4, 25);
+  if (!cfg.randomiseSensors && fixedSensors) return fixedSensors;
+
+  const count = rng.int(cfg.sensorCountMin, cfg.sensorCountMax);
   const sensors: Sensor[] = [];
   const MIN_APART = 5;
   const MAX_ATTEMPTS = 100;
 
-  // Divide grid into quadrants — ensure at least one sensor per quadrant
   const quadrants: Array<[number, number, number, number]> = [
-    [BOUNDARY,        BOUNDARY,        ROWS / 2 - 1,  COLS / 2 - 1],
-    [BOUNDARY,        COLS / 2,        ROWS / 2 - 1,  COLS - BOUNDARY - 1],
-    [ROWS / 2,        BOUNDARY,        ROWS - BOUNDARY - 1, COLS / 2 - 1],
-    [ROWS / 2,        COLS / 2,        ROWS - BOUNDARY - 1, COLS - BOUNDARY - 1],
+    [BOUNDARY,     BOUNDARY,     ROWS / 2 - 1,         COLS / 2 - 1],
+    [BOUNDARY,     COLS / 2,     ROWS / 2 - 1,         COLS - BOUNDARY - 1],
+    [ROWS / 2,     BOUNDARY,     ROWS - BOUNDARY - 1,  COLS / 2 - 1],
+    [ROWS / 2,     COLS / 2,     ROWS - BOUNDARY - 1,  COLS - BOUNDARY - 1],
   ];
 
   const occupied = new Set([...blocked, ...doors]);
@@ -226,12 +255,10 @@ function generateSensors(
       const c = rng.int(cMin, cMax);
       const i_ = idx(r, c);
       if (occupied.has(i_)) continue;
-
       const tooClose = sensors.some(
         (s) => Math.abs(s.row - r) + Math.abs(s.col - c) < MIN_APART,
       );
       if (tooClose) continue;
-
       sensors.push({ id: `sensor-rnd-${r}-${c}`, row: r, col: c });
       occupied.add(i_);
       return true;
@@ -239,10 +266,7 @@ function generateSensors(
     return false;
   };
 
-  // One per quadrant first
   quadrants.forEach(([rMin, cMin, rMax, cMax]) => tryPlace(rMin, cMin, rMax, cMax));
-
-  // Fill remaining count
   const remaining = count - sensors.length;
   for (let s = 0; s < remaining; s++) {
     tryPlace(BOUNDARY, BOUNDARY, ROWS - BOUNDARY - 1, COLS - BOUNDARY - 1);
@@ -252,21 +276,39 @@ function generateSensors(
 }
 
 // ── Physics params ────────────────────────────────────────────────────────
-function generateParams(rng: Rng): SimParams {
-  // Wind: uniform in [-0.4, 0.4], magnitude > 0.05
+function generateParams(
+  rng: Rng,
+  cfg: GeneratorConfig,
+  fixedParams?: Partial<SimParams>,
+): SimParams {
   let windX: number, windY: number;
-  do {
-    windX = (rng.next() * 0.8) - 0.4;
-    windY = (rng.next() * 0.8) - 0.4;
-  } while (Math.sqrt(windX * windX + windY * windY) < 0.05);
+  if (!cfg.randomiseWind && fixedParams?.windX !== undefined && fixedParams?.windY !== undefined) {
+    windX = fixedParams.windX;
+    windY = fixedParams.windY;
+  } else {
+    do {
+      windX = (rng.next() * 0.8) - 0.4;
+      windY = (rng.next() * 0.8) - 0.4;
+    } while (Math.sqrt(windX * windX + windY * windY) < 0.05);
+  }
+
+  const diffusionRates = [0.06, 0.08, 0.10, 0.12, 0.15, 0.18];
+  const decayFactors   = [0.995, 0.997, 0.999, 0.9995, 0.9999];
+  const injections     = [5, 10, 15, 20, 30, 40, 50];
 
   return {
-    diffusionRate:  rng.pick([0.08, 0.10, 0.12, 0.18]),
-    decayFactor:    rng.pick([0.997, 0.999, 0.9995]),
-    leakInjection:  rng.pick([10, 15, 20, 30, 40]),
-    tickMs:         16,
-    windX:          Math.round(windX * 100) / 100,
-    windY:          Math.round(windY * 100) / 100,
+    diffusionRate: cfg.randomiseDiffusion
+      ? rng.pick(diffusionRates)
+      : (fixedParams?.diffusionRate ?? 0.10),
+    decayFactor: cfg.randomiseDecay
+      ? rng.pick(decayFactors)
+      : (fixedParams?.decayFactor ?? 0.999),
+    leakInjection: cfg.randomiseInjection
+      ? rng.pick(injections)
+      : (fixedParams?.leakInjection ?? 20),
+    tickMs: 30,
+    windX:  Math.round(windX * 100) / 100,
+    windY:  Math.round(windY * 100) / 100,
   };
 }
 
@@ -274,19 +316,37 @@ function generateParams(rng: Rng): SimParams {
 export interface RandomLayoutResult {
   snapshot: LayoutSnapshot;
   params: SimParams;
-  /** Seed used — store this to reproduce the layout exactly. */
   seed: number;
+  config_hash: string;
+  locked_dimensions: string[];
 }
 
-export function generateRandomLayout(seed?: number): RandomLayoutResult {
+/**
+ * Generate a random (or partially locked) layout.
+ *
+ * @param seed       - Optional seed for reproducibility.
+ * @param config     - Which dimensions to randomise. Defaults to all ON.
+ * @param fixedState - Current layout values used when a dimension is locked.
+ */
+export function generateRandomLayout(
+  seed?: number,
+  config: GeneratorConfig = defaultConfig,
+  fixedState?: {
+    walls?: number[];
+    doors?: number[];
+    leaks?: GasLeak[];
+    sensors?: Sensor[];
+    params?: Partial<SimParams>;
+  },
+): RandomLayoutResult {
   const s = seed ?? (Math.random() * 0xffffffff) >>> 0;
   const rng = makePrng(s);
 
-  const { blocked, segments }   = generateWalls(rng);
-  const { doors, blocked: blk2 } = generateDoors(rng, segments, blocked);
-  const leaks                    = generateLeaks(rng, blk2, doors);
-  const sensors                  = generateSensors(rng, blk2, doors, leaks);
-  const params                   = generateParams(rng);
+  const { blocked, segments }    = generateWalls(rng, config, fixedState?.walls);
+  const { doors, blocked: blk2 } = generateDoors(rng, config, segments, blocked, fixedState?.doors);
+  const leaks                    = generateLeaks(rng, config, blk2, doors, fixedState?.leaks);
+  const sensors                  = generateSensors(rng, config, blk2, doors, leaks, fixedState?.sensors);
+  const params                   = generateParams(rng, config, fixedState?.params);
 
   const snapshot: LayoutSnapshot = {
     version: 1,
@@ -296,5 +356,11 @@ export function generateRandomLayout(seed?: number): RandomLayoutResult {
     sensors,
   };
 
-  return { snapshot, params, seed: s };
+  return {
+    snapshot,
+    params,
+    seed: s,
+    config_hash: computeConfigHash(config),
+    locked_dimensions: lockedConfig(config),
+  };
 }

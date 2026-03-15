@@ -67,6 +67,10 @@ export const defaultConfig: GeneratorConfig = {
   recordEvery: 10,
 };
 
+/**
+ * Returns an array of dimension names that are locked (randomise = false).
+ * Used to populate the locked_dimensions[] field in every NDJSON record.
+ */
 export const lockedConfig = (base: GeneratorConfig): string[] =>
   (Object.keys(base) as (keyof GeneratorConfig)[])
     .filter(k => k.startsWith('randomise') && base[k] === false)
