@@ -1,6 +1,7 @@
 """
 Cloud Function — NDJSON validator + BigQuery loader
 Trigger: GCS object finalised in raw/ndjson/
+Streams the file line by line to avoid OOM on large files.
 """
 
 import json
@@ -17,6 +18,9 @@ BUCKET     = os.environ["BUCKET"]
 BQ_DATASET = os.environ.get("BQ_DATASET", "raw")
 BQ_TABLE   = os.environ.get("BQ_TABLE",   "simulation_ticks")
 
+# Flush to BigQuery every N rows — keeps memory flat regardless of file size
+BQ_BATCH_SIZE = 500
+
 REQUIRED_FIELDS = {
     "source", "seed", "layout_id", "config_hash",
     "tick", "leaks", "sensors", "walls", "doors",
@@ -27,78 +31,81 @@ gcs_client = storage.Client(project=PROJECT_ID)
 
 
 def on_ndjson_upload(event: dict, context) -> None:
-    """Entry point — called when a file lands in GCS."""
     bucket_name = event["bucket"]
     object_name = event["name"]
 
-    # Only process files in raw/ndjson/ — ignore everything else
     if not object_name.startswith("raw/ndjson/"):
-        log.info("Skipping %s — not in raw/ndjson/", object_name)
         return
-
-    # Ignore the .keep placeholder
     if object_name.endswith(".keep"):
+        return
+    # Skip files already in rejected/
+    if "/rejected/" in object_name:
         return
 
     log.info("Processing: %s", object_name)
     bucket = gcs_client.bucket(bucket_name)
     blob   = bucket.blob(object_name)
 
-    try:
-        content = blob.download_as_text(encoding="utf-8")
-    except Exception as e:
-        log.error("Failed to download %s: %s", object_name, e)
-        return
+    table_ref = f"{PROJECT_ID}.{BQ_DATASET}.{BQ_TABLE}"
+    now_utc   = datetime.now(timezone.utc).isoformat()
 
-    # ── Parse and validate ────────────────────────────────────────────────
-    rows    = []
-    errors  = []
-    now_utc = datetime.now(timezone.utc).isoformat()
+    batch        = []
+    total_loaded = 0
+    errors       = []
+    line_num     = 0
 
-    for line_num, line in enumerate(content.splitlines(), start=1):
-        line = line.strip()
-        if not line:
-            continue
+    # Stream line by line — never loads the whole file into memory
+    with blob.open("r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+            line_num += 1
 
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError as e:
-            errors.append(f"Line {line_num}: JSON parse error — {e}")
-            continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as e:
+                errors.append(f"Line {line_num}: JSON parse error — {e}")
+                continue
 
-        err = _validate(record, line_num)
-        if err:
-            errors.append(err)
-            continue
+            err = _validate(record, line_num)
+            if err:
+                errors.append(err)
+                continue
 
-        rows.append(_to_bq_row(record, now_utc))
+            batch.append(_to_bq_row(record, now_utc))
+
+            # Flush batch to BigQuery
+            if len(batch) >= BQ_BATCH_SIZE:
+                bq_errors = bq_client.insert_rows_json(table_ref, batch)
+                if bq_errors:
+                    log.error("BigQuery insert errors: %s", bq_errors)
+                    errors.append(f"BigQuery error on batch ending line {line_num}")
+                else:
+                    total_loaded += len(batch)
+                batch = []
+
+    # Flush remaining rows
+    if batch:
+        bq_errors = bq_client.insert_rows_json(table_ref, batch)
+        if bq_errors:
+            log.error("BigQuery insert errors (final batch): %s", bq_errors)
+        else:
+            total_loaded += len(batch)
 
     if errors:
-        log.warning("Validation errors in %s:\n%s", object_name, "\n".join(errors))
-        _move_to_rejected(bucket, object_name, "\n".join(errors))
-        return
+        log.warning("%d validation errors in %s — first 5: %s",
+                    len(errors), object_name, errors[:5])
+        # Only reject if ALL lines failed — partial success still loads
+        if total_loaded == 0:
+            _move_to_rejected(bucket, object_name, "\n".join(errors[:20]))
+            return
 
-    if not rows:
-        log.warning("No valid rows in %s — skipping", object_name)
-        return
-
-    # ── Load to BigQuery ──────────────────────────────────────────────────
-    table_ref = f"{PROJECT_ID}.{BQ_DATASET}.{BQ_TABLE}"
-    errors_bq = bq_client.insert_rows_json(table_ref, rows)
-
-    if errors_bq:
-        log.error("BigQuery insert errors: %s", errors_bq)
-        _move_to_rejected(bucket, object_name, str(errors_bq))
-        return
-
-    log.info("Loaded %d rows from %s into %s", len(rows), object_name, table_ref)
-
-    # ── Update last_data_upload in model_registry.json ───────────────────
+    log.info("Loaded %d rows from %s into %s", total_loaded, object_name, table_ref)
     _update_registry_timestamp(bucket_name, now_utc)
 
 
 def _validate(record: dict, line_num: int) -> str | None:
-    """Returns an error string if invalid, None if valid."""
     missing = REQUIRED_FIELDS - set(record.keys())
     if missing:
         return f"Line {line_num}: missing fields {missing}"
@@ -119,7 +126,6 @@ def _validate(record: dict, line_num: int) -> str | None:
 
 
 def _to_bq_row(record: dict, uploaded_at: str) -> dict:
-    """Convert a validated record to a BigQuery row dict."""
     return {
         "source":            record.get("source"),
         "seed":              record.get("seed"),
@@ -141,22 +147,19 @@ def _to_bq_row(record: dict, uploaded_at: str) -> dict:
 
 
 def _move_to_rejected(bucket, object_name: str, reason: str) -> None:
-    """Move a failed file to raw/ndjson/rejected/ and write a reason file."""
     filename    = object_name.split("/")[-1]
     dest_name   = f"raw/ndjson/rejected/{filename}"
     reason_name = f"raw/ndjson/rejected/{filename}.reason.txt"
-
     try:
         bucket.copy_blob(bucket.blob(object_name), bucket, dest_name)
         bucket.blob(reason_name).upload_from_string(reason, content_type="text/plain")
         bucket.blob(object_name).delete()
         log.info("Moved %s to rejected/", object_name)
     except Exception as e:
-        log.error("Failed to move %s to rejected: %s", object_name, e)
+        log.error("Failed to move to rejected: %s", e)
 
 
 def _update_registry_timestamp(bucket_name: str, timestamp: str) -> None:
-    """Update last_data_upload in model_registry.json."""
     try:
         bucket = gcs_client.bucket(bucket_name)
         blob   = bucket.blob("model_registry.json")
@@ -166,6 +169,8 @@ def _update_registry_timestamp(bucket_name: str, timestamp: str) -> None:
             json.dumps(reg, indent=2),
             content_type="application/json",
         )
+        blob.cache_control = "no-cache, no-store, max-age=0"
+        blob.patch()
         log.info("Updated model_registry.json last_data_upload = %s", timestamp)
     except Exception as e:
         log.error("Failed to update registry: %s", e)
