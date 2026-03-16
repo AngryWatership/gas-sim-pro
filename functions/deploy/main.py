@@ -19,6 +19,8 @@ import logging
 import requests
 from datetime import datetime, timezone
 from google.cloud import storage
+from google.cloud.devtools import cloudbuild_v1
+from google.cloud import run_v2
 import google.auth
 import google.auth.transport.requests
 
@@ -71,42 +73,47 @@ def on_registry_update(event: dict, context) -> None:
 
     log.info("MAE gate passed — proceeding with deploy")
 
-    # ── Cloud Build ───────────────────────────────────────────────────────
+    # ── Cloud Build via API ───────────────────────────────────────────────
     image_tag = f"{IMAGE_REPO}:{version}"
     log.info("Triggering Cloud Build for image: %s", image_tag)
 
     try:
-        result = _run_gcloud([
-            "gcloud", "builds", "submit",
-            f"gs://{BUCKET}/{reg['joblib_path']}",
-            "--no-source",
-            f"--tag={image_tag}",
-            f"--project={PROJECT_ID}",
-        ])
-        log.info("Cloud Build complete: %s", result[:200])
+        cb_client = cloudbuild_v1.CloudBuildClient()
+        build = cloudbuild_v1.Build(
+            steps=[
+                cloudbuild_v1.BuildStep(
+                    name="gcr.io/cloud-builders/docker",
+                    args=["build", "-t", image_tag,
+                          "--build-arg", f"MODEL_PATH={reg['joblib_path']}",
+                          "."],
+                )
+            ],
+            images=[image_tag],
+            source=cloudbuild_v1.Source(
+                storage_source=cloudbuild_v1.StorageSource(
+                    bucket=BUCKET,
+                    object_=reg["joblib_path"],
+                )
+            ),
+        )
+        op = cb_client.create_build(project_id=PROJECT_ID, build=build)
+        result = op.result(timeout=300)
+        if result.status != cloudbuild_v1.Build.Status.SUCCESS:
+            raise RuntimeError(f"Cloud Build status: {result.status.name}")
+        log.info("Cloud Build complete")
     except Exception as e:
         log.error("Cloud Build failed: %s", e)
-        _update_registry(bucket, reg, {"gate_status": "build_failed"})
+        _write_gate_status(bucket, "build_failed")
         return
 
-    # ── Deploy with no traffic ────────────────────────────────────────────
-    log.info("Deploying new revision (no traffic)")
+    # ── Deploy via Cloud Run API ──────────────────────────────────────────
+    log.info("Deploying new revision via Cloud Run API")
     try:
-        result = _run_gcloud([
-            "gcloud", "run", "deploy", SERVICE,
-            f"--image={image_tag}",
-            f"--region={REGION}",
-            f"--project={PROJECT_ID}",
-            "--no-traffic",
-            f"--set-env-vars=PROJECT_ID={PROJECT_ID},BUCKET={BUCKET}",
-            "--memory=1Gi",
-            "--format=value(status.latestCreatedRevisionName)",
-        ])
-        new_revision = result.strip()
-        log.info("New revision: %s", new_revision)
+        _deploy_cloud_run(image_tag)
+        log.info("Cloud Run revision deployed")
     except Exception as e:
         log.error("Deploy failed: %s", e)
-        _update_registry(bucket, reg, {"gate_status": "deploy_failed"})
+        _write_gate_status(bucket, "deploy_failed")
         return
 
     # ── Smoke test ────────────────────────────────────────────────────────
@@ -121,17 +128,12 @@ def on_registry_update(event: dict, context) -> None:
         return
 
     # ── Promote to 100% traffic ───────────────────────────────────────────
-    log.info("Smoke test passed — promoting %s to 100%%", new_revision)
+    log.info("Smoke test passed — promoting to 100%%")
     try:
-        _run_gcloud([
-            "gcloud", "run", "services", "update-traffic", SERVICE,
-            f"--region={REGION}",
-            f"--project={PROJECT_ID}",
-            "--to-latest",
-        ])
+        _promote_traffic()
     except Exception as e:
         log.error("Traffic promotion failed: %s", e)
-        _update_registry(bucket, reg, {"gate_status": "traffic_failed"})
+        _write_gate_status(bucket, "traffic_failed")
         return
 
     # ── Update registry ───────────────────────────────────────────────────
@@ -188,21 +190,31 @@ def _smoke_test(service_url: str) -> bool:
 
 
 def _get_service_url() -> str:
-    result = _run_gcloud([
-        "gcloud", "run", "services", "describe", SERVICE,
-        f"--region={REGION}",
-        f"--project={PROJECT_ID}",
-        "--format=value(status.url)",
-    ])
-    return result.strip()
+    client = run_v2.ServicesClient()
+    name   = f"projects/{PROJECT_ID}/locations/{REGION}/services/{SERVICE}"
+    svc    = client.get_service(name=name)
+    return svc.uri
 
 
-def _run_gcloud(cmd: list) -> str:
-    import subprocess
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    if result.returncode != 0:
-        raise RuntimeError(f"Command failed: {result.stderr}")
-    return result.stdout
+def _deploy_cloud_run(image_tag: str) -> None:
+    """Deploy new revision with no traffic via Cloud Run API."""
+    client = run_v2.ServicesClient()
+    name   = f"projects/{PROJECT_ID}/locations/{REGION}/services/{SERVICE}"
+    svc    = client.get_service(name=name)
+    svc.template.containers[0].image = image_tag
+    svc.traffic = [run_v2.TrafficTarget(type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST, percent=100)]
+    op = client.update_service(service=svc)
+    op.result(timeout=300)
+
+
+def _promote_traffic() -> None:
+    """Promote latest revision to 100% traffic."""
+    client = run_v2.ServicesClient()
+    name   = f"projects/{PROJECT_ID}/locations/{REGION}/services/{SERVICE}"
+    svc    = client.get_service(name=name)
+    svc.traffic = [run_v2.TrafficTarget(type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST, percent=100)]
+    op = client.update_service(service=svc)
+    op.result(timeout=120)
 
 
 

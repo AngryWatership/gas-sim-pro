@@ -73,7 +73,12 @@ export function useTrainButton(): UseTrainButton {
 
       if (!regRes.ok) { setBtnState("no_registry"); return; }
 
-      const reg: Registry = await regRes.json();
+      const regText = await regRes.text();
+      if (!regText.trim()) { setBtnState("no_registry"); return; }
+
+      let reg: Registry;
+      try { reg = JSON.parse(regText); }
+      catch { setBtnState("no_registry"); return; }
       setModelVersion(reg.latest_version ?? null);
       setLastMae(typeof reg.mae === "number" ? reg.mae : null);
 
