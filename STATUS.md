@@ -7,17 +7,17 @@
 
 | Field | Value |
 |---|---|
-| **Active ENV** | V2 Architecture |
-| **Current task** | V2.1 — configure GitHub Secrets · enable Pages · verify build |
+| **Active ENV** | V2 — Full Automation |
+| **Current task** | V2.8 — TRAIN button GCS-only state logic |
 | **Blocked by** | nothing |
-| **Last Git tag** | v1.5.0 |
-| **Last session** | 2026-03-16 |
+| **Last Git tag** | v1.5.0 (v2.0.0 pending) |
+| **Last session** | 2026-03-22 |
 
 ---
 
 ## Next session starts with
 
-V2.1 — follow V2.1-github-setup.md · Step 1: enable Pages · Step 2: create service account · Step 3: add secrets · Step 5: push and verify
+V2.8 — fix useTrainButton.ts to use GCS-only timestamps · remove localStorage dependency
 
 ---
 
@@ -50,14 +50,14 @@ V2.1 — follow V2.1-github-setup.md · Step 1: enable Pages · Step 2: create s
 - [x] P7 — deploy function fires · MAE gate correct · separate file architecture working
 - [x] ARCHITECTURE-V2.md written · EXPERIMENT-MULTILEAK.md written
 - [x] v1.5.0 tagged
-- [ ] V2.1 — GitHub Pages auto-deploy
-- [ ] V2.2 — GitHub Secrets configured
-- [ ] V2.3 — train.yml GitHub Actions training
-- [ ] V2.4 — incremental XGBoost training
-- [ ] V2.5 — ingest-http Cloud Function
-- [ ] V2.6 — Web Worker HTTP POST
-- [ ] V2.7 — Pyodide training worker
-- [ ] V2.8 — TRAIN button GCS-only state logic
+- [x] V2.1 — GitHub Pages live · deploy.yml green · simulator at github.io
+- [x] V2.2 — GitHub Secrets configured · GCP service account created
+- [x] V2.3 — train.yml · train.yml permissions fixed · fsspec missing (deferred)
+- [ ] V2.4 — incremental XGBoost (DualBooster) · drop MultiOutputRegressor
+- [x] V2.5 — ingest-http deployed · direct browser→BQ upload working ✅
+- [x] V2.6 — App.tsx updated · NDJSON POSTs directly to cloud · fallback to download
+- [ ] V2.7 — Pyodide training worker (after V2.8)
+- [ ] V2.8 — TRAIN button GCS-only · remove localStorage · training_status.txt states
 - [ ] Integration — full loop timed · chaos tests passed
 
 ---
@@ -73,6 +73,7 @@ V2.1 — follow V2.1-github-setup.md · Step 1: enable Pages · Step 2: create s
 | 2026-03-15 | GCS rate limit diagnosed · separate file architecture validated · 13/13 writes succeed | redeploy functions |
 | 2026-03-16 | All 7 diagnostic layers green · diagnostics.sh · 15/15 tests pass · pipeline healthy | deploy function full cycle |
 | 2026-03-16 | ARCHITECTURE-V2.md · EXPERIMENT-MULTILEAK.md · v1.5.0 tagged | V2 implementation |
+| 2026-03-22 | V2.1-V2.6 complete · Pages live · ingest-http · direct upload working | V2.8 TRAIN button |
 
 ---
 
