@@ -32,6 +32,12 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          VITE_GCS_REGISTRY_URL:   ${{ secrets.VITE_GCS_REGISTRY_URL }}
+          VITE_CLOUD_RUN_URL:      ${{ secrets.VITE_CLOUD_RUN_URL }}
+          VITE_INGEST_URL:         ${{ secrets.VITE_INGEST_URL }}
+          VITE_INGEST_TOKEN:       ${{ secrets.VITE_INGEST_TOKEN }}
+          VITE_COLAB_NOTEBOOK_URL: ${{ secrets.VITE_COLAB_NOTEBOOK_URL }}
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
