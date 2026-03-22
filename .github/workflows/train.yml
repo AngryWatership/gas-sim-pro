@@ -4,8 +4,8 @@ on:
   repository_dispatch:
     types: [new-training-data]
   schedule:
-    - cron: '0 2 * * *'    # nightly fallback at 2am UTC
-  workflow_dispatch:        # manual trigger with optional inputs
+    - cron: '0 2 * * *'
+  workflow_dispatch:
     inputs:
       force_retrain:
         description: 'Force retrain even if threshold not met'
@@ -13,8 +13,15 @@ on:
         default: 'false'
 
 concurrency:
-  group: training           # only one training run at a time
-  cancel-in-progress: false # never cancel — let it finish
+  group: training
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   train:
@@ -47,10 +54,9 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
 
-      - name: Write training status
+      - name: Write training status — running
         run: |
-          echo "running" | python3 -c "
-          import sys
+          python3 -c "
           from google.cloud import storage
           gcs = storage.Client(project='${{ secrets.GCP_PROJECT_ID }}')
           b = gcs.bucket('${{ secrets.GCS_BUCKET }}')
@@ -66,7 +72,7 @@ jobs:
         run: python3 train_github_actions.py
 
       - name: Write training status — idle
-        if: always()    # runs even if training step fails
+        if: always()
         run: |
           python3 -c "
           from google.cloud import storage
@@ -76,15 +82,24 @@ jobs:
           print('training_status.txt = idle')
           "
 
-      - name: Open GitHub Issue on gate failure
+      - name: Open GitHub Issue on failure
         if: failure()
         uses: actions/github-script@v7.0.1
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            github.rest.issues.create({
+            const issues = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: 'Training failed — MAE gate or build error',
-              body: `Training run failed at ${new Date().toISOString()}.\n\nWorkflow: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              labels: ['training', 'automated']
+              labels: ['training'],
+              state: 'open'
             })
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'Training failed — MAE gate or build error',
+                body: `Training run failed at ${new Date().toISOString()}.\n\nWorkflow: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                labels: ['training', 'automated']
+              })
+            }
