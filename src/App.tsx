@@ -9,8 +9,36 @@ import { generateRandomLayout } from "./utils/randomLayout";
 import { defaultConfig } from "./utils/generatorConfig";
 import type { GeneratorConfig } from "./utils/generatorConfig";
 
-// ── NDJSON download helper ────────────────────────────────────────────────
-function downloadNdjson(ndjson: string, configHash: string, batchIndex: number) {
+// ── NDJSON upload + download fallback ────────────────────────────────────
+const INGEST_URL   = import.meta.env.VITE_INGEST_URL   as string | undefined;
+const INGEST_TOKEN = import.meta.env.VITE_INGEST_TOKEN as string | undefined;
+
+async function uploadNdjson(
+  ndjson: string,
+  configHash: string,
+  batchIndex: number,
+): Promise<void> {
+  // Try HTTP POST to ingest endpoint first
+  if (INGEST_URL) {
+    try {
+      const res = await fetch(INGEST_URL, {
+        method:  "POST",
+        headers: {
+          "Content-Type":  "application/x-ndjson",
+          ...(INGEST_TOKEN ? { Authorization: `Bearer ${INGEST_TOKEN}` } : {}),
+        },
+        body: ndjson,
+      });
+      if (res.ok) {
+        console.info(`[ingest] batch ${batchIndex} uploaded — ${ndjson.split("\n").length} records`);
+        return;   // success — no download needed
+      }
+      console.warn(`[ingest] HTTP ${res.status} — falling back to download`);
+    } catch (err) {
+      console.warn("[ingest] POST failed — falling back to download:", err);
+    }
+  }
+  // Fallback: download file to disk
   const ts   = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const name = `synthetic-${configHash}-${ts}-${batchIndex}.ndjson`;
   const blob = new Blob([ndjson], { type: "application/x-ndjson" });
@@ -105,7 +133,7 @@ export default function App() {
       if (msg.type === "flush") {
         setRowsGenerated(r => r + msg.rowCount);
         batchIndex.current++;
-        downloadNdjson(msg.ndjson, configHash.current, batchIndex.current);
+        void uploadNdjson(msg.ndjson, configHash.current, batchIndex.current);
       }
 
       if (msg.type === "done") {
@@ -114,8 +142,7 @@ export default function App() {
         setIsGenerating(false);
         worker.terminate();
         workerRef.current = null;
-        // Store last export timestamp for TRAIN button logic
-        localStorage.setItem("lastExportTimestamp", new Date().toISOString());
+        // TRAIN button state now driven by GCS last_data_upload — no localStorage needed
       }
 
       if (msg.type === "error") {
