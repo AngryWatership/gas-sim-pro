@@ -12,7 +12,7 @@
  *   no_registry — VITE_GCS_REGISTRY_URL not set
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 const COLAB_URL =
   import.meta.env.VITE_COLAB_NOTEBOOK_URL ??
@@ -26,7 +26,9 @@ export type TrainButtonState =
   | "active"        // purple — new data, no trained model
   | "current"       // grey   — model is current
   | "training"      // spinning (developer) / grey+updating (client)
-  | "error"         // developer only — gate failed or build failed
+  | "deployed"      // green flash — new model just deployed
+  | "rejected"      // yellow flash — gate failed, model not deployed
+  | "error"         // developer only — build/infra error
   | "no_registry"   // VITE_GCS_REGISTRY_URL not configured
   | "loading";      // initial fetch
 
@@ -61,19 +63,21 @@ export function useTrainButton(): UseTrainButton {
   const [lastMae,      setLastMae]      = useState<number | null>(null);
   const [isTraining,   setIsTraining]   = useState(false);
   const [gateStatus,   setGateStatus]   = useState<string | null>(null);
+  const clickedAt = useRef<number | null>(null);
 
   const check = useCallback(async () => {
     if (!REGISTRY_URL) { setState("no_registry"); return; }
 
     try {
       // Fetch all GCS sources in parallel
-      const [regRes, uploadRes, _trainedRes, trainingStatusRes, gateRes] =
+      const [regRes, uploadRes, _trainedRes, trainingStatusRes, gateRes, trainingResultRes] =
         await Promise.all([
-          fetch(`${REGISTRY_URL}?${Date.now()}`,                              { cache: "no-store" }),
-          fetch(`${registryFileUrl("last_data_upload.txt")}?${Date.now()}`,   { cache: "no-store" }).catch(() => null),
-          fetch(`${registryFileUrl("last_deployed.txt")}?${Date.now()}`,      { cache: "no-store" }).catch(() => null),
-          fetch(`${registryFileUrl("training_status.txt")}?${Date.now()}`,    { cache: "no-store" }).catch(() => null),
-          fetch(`${registryFileUrl("gate_status.txt")}?${Date.now()}`,        { cache: "no-store" }).catch(() => null),
+          fetch(`${REGISTRY_URL}?${Date.now()}`,                                     { cache: "no-store" }),
+          fetch(`${registryFileUrl("last_data_upload.txt")}?${Date.now()}`,        { cache: "no-store" }).catch(() => null),
+          fetch(`${registryFileUrl("last_deployed.txt")}?${Date.now()}`,           { cache: "no-store" }).catch(() => null),
+          fetch(`${registryFileUrl("training_status.txt")}?${Date.now()}`,         { cache: "no-store" }).catch(() => null),
+          fetch(`${registryFileUrl("gate_status.txt")}?${Date.now()}`,             { cache: "no-store" }).catch(() => null),
+          fetch(`${registryFileUrl("last_training_result.json")}?${Date.now()}`,   { cache: "no-store" }).catch(() => null),
         ]);
 
       if (!regRes.ok) { setState("no_registry"); return; }
@@ -106,6 +110,26 @@ export function useTrainButton(): UseTrainButton {
       // Gate status (developer only)
       const gate = gateRes?.ok ? (await gateRes.text()).trim() : null;
       setGateStatus(gate);
+
+      // ── Flash states — show for 10s after click ──────────────────────────
+      const FLASH_DURATION_MS = 10_000;
+      const justClicked = clickedAt.current !== null &&
+        Date.now() - clickedAt.current < FLASH_DURATION_MS;
+
+      if (justClicked && trainingResultRes?.ok) {
+        try {
+          const result = await trainingResultRes.json();
+          const trainedAt = new Date(result.trained_at).getTime();
+          const isRecent  = Date.now() - trainedAt < FLASH_DURATION_MS * 6; // 60s window
+          if (isRecent) {
+            if (result.status === "passed" || result.status === "first_model") {
+              setState("deployed"); return;
+            } else if (result.status === "failed" || result.status === "marginal") {
+              setState("rejected"); return;
+            }
+          }
+        } catch { /* ignore */ }
+      }
 
       // ── State machine ─────────────────────────────────────────────────────
       if (training) {
@@ -140,6 +164,8 @@ export function useTrainButton(): UseTrainButton {
   }, [check]);
 
   const onTrain = useCallback(() => {
+    clickedAt.current = Date.now();
+    setState("current"); // grey immediately on click
     window.open(COLAB_URL, "_blank", "noopener,noreferrer");
   }, []);
 

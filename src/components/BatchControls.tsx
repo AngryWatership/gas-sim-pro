@@ -37,11 +37,15 @@ export default function BatchControls({
   const trainActive   = train.state === "active";
   const trainLoading  = train.state === "loading";
   const trainTraining = train.state === "training";
+  const trainDeployed = train.state === "deployed";
+  const trainRejected = train.state === "rejected";
   const trainError    = train.state === "error";
   const IS_DEV        = import.meta.env.VITE_IS_DEVELOPER === "true";
 
   const trainLabel = trainLoading  ? "⟳ TRAIN …"
                    : trainTraining ? (IS_DEV ? "⟳ TRAINING…" : "⟳ TRAIN")
+                   : trainDeployed ? "✓ DEPLOYED"
+                   : trainRejected ? "⚠ REJECTED"
                    : "⟳ TRAIN";
 
   const trainTitle = train.state === "no_registry"
@@ -52,12 +56,18 @@ export default function BatchControls({
         ? "New data available — click to open Colab and retrain"
       : train.state === "training"
         ? IS_DEV ? "Training in progress via GitHub Actions…" : "Model is current"
+      : train.state === "deployed"
+        ? `New model deployed · MAE ${train.lastMae?.toFixed(4) ?? "?"}`
+      : train.state === "rejected"
+        ? `Model not deployed — gate failed · MAE ${train.lastMae?.toFixed(4) ?? "?"} did not beat previous`
       : train.state === "error"
         ? `Gate or build failed — ${train.gateStatus ?? "check logs"}`
         : "Checking registry…";
 
-  // Colour: purple=active, amber=error(dev), grey=all others
+  // Colour: purple=active, green=deployed, yellow=rejected/error, grey=all others
   const trainColor = trainActive   ? "var(--accent)"
+                   : trainDeployed ? "#2ecc71"
+                   : trainRejected ? "#ffb347"
                    : trainError    ? "#ffb347"
                    : "var(--text-dim)";
 
