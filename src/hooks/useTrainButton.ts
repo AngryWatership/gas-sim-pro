@@ -1,12 +1,15 @@
 /**
  * useTrainButton.ts
- * Manages TRAIN button state.
+ * TRAIN button state — driven exclusively by GCS timestamps.
+ * No localStorage. No browser state.
  *
- * Reads from two GCS sources to avoid rate-limiting model_registry.json:
- *   model_registry.json        — written by Colab + deploy function
- *   registry/last_data_upload.txt — written by ingest function
- *
- * Button is ACTIVE when max(last_data_upload from either source) > last_deployed
+ * States:
+ *   purple   — last_data_upload > last_trained  (new data, no model yet)
+ *   grey     — last_trained >= last_data_upload  (model current)
+ *   spinning — training_status.txt = "running"   (developer sees spinner, client sees grey + "updating")
+ *   error    — gate_status = failed_mae_gate      (developer only)
+ *   loading  — initial fetch in progress
+ *   no_registry — VITE_GCS_REGISTRY_URL not set
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -16,104 +19,129 @@ const COLAB_URL =
   "https://colab.research.google.com/github/AngryWatership/gas-sim-pro/blob/main/notebooks/train.ipynb";
 
 const REGISTRY_URL: string | undefined = import.meta.env.VITE_GCS_REGISTRY_URL;
-const POLL_INTERVAL_MS = 60_000;
-
-interface Registry {
-  last_trained:     string | null;
-  last_deployed:    string | null;
-  last_data_upload: string | null;
-  latest_version:   string | null;
-  mae:              number | null;
-}
+const IS_DEVELOPER = import.meta.env.VITE_IS_DEVELOPER === "true";
+const POLL_MS = 60_000;
 
 export type TrainButtonState =
-  | "active"
-  | "current"
-  | "no_registry"
-  | "loading";
+  | "active"        // purple — new data, no trained model
+  | "current"       // grey   — model is current
+  | "training"      // spinning (developer) / grey+updating (client)
+  | "error"         // developer only — gate failed or build failed
+  | "no_registry"   // VITE_GCS_REGISTRY_URL not configured
+  | "loading";      // initial fetch
 
 export interface UseTrainButton {
   state:        TrainButtonState;
   modelVersion: string | null;
   lastMae:      number | null;
+  isTraining:   boolean;   // true when training_status.txt = running
+  gateStatus:   string | null;
   onTrain:      () => void;
 }
 
-function isAfter(a: string | null, b: string | null): boolean {
-  if (!a) return false;
-  const dateA = new Date(a).getTime();
-  const dateB = b ? new Date(b).getTime() : 0;
-  return !isNaN(dateA) && dateA > dateB;
-}
-
-// Derive bucket base URL from registry URL
 function registryFileUrl(filename: string): string | null {
   if (!REGISTRY_URL) return null;
-  const base = REGISTRY_URL.replace("/model_registry.json", "");
-  return `${base}/registry/${filename}`;
+  return REGISTRY_URL.replace("/model_registry.json", `/registry/${filename}`);
+}
+
+function isAfter(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a) return false;
+  try {
+    const ta = new Date(a).getTime();
+    const tb = b ? new Date(b).getTime() : 0;
+    return !isNaN(ta) && ta > tb;
+  } catch {
+    return false;
+  }
 }
 
 export function useTrainButton(): UseTrainButton {
-  const [btnState,     setBtnState]     = useState<TrainButtonState>("loading");
+  const [state,        setState]        = useState<TrainButtonState>("loading");
   const [modelVersion, setModelVersion] = useState<string | null>(null);
   const [lastMae,      setLastMae]      = useState<number | null>(null);
+  const [isTraining,   setIsTraining]   = useState(false);
+  const [gateStatus,   setGateStatus]   = useState<string | null>(null);
 
-  const checkRegistry = useCallback(async () => {
-    if (!REGISTRY_URL) { setBtnState("no_registry"); return; }
+  const check = useCallback(async () => {
+    if (!REGISTRY_URL) { setState("no_registry"); return; }
 
     try {
-      // Fetch all sources in parallel — separate files avoid rate-limiting model_registry.json
-      const [regRes, uploadRes, deployedRes] = await Promise.all([
-        fetch(`${REGISTRY_URL}?${Date.now()}`, { cache: "no-store" }),
-        fetch(`${registryFileUrl("last_data_upload.txt")}?${Date.now()}`, { cache: "no-store" })
-          .catch(() => null),
-        fetch(`${registryFileUrl("last_deployed.txt")}?${Date.now()}`, { cache: "no-store" })
-          .catch(() => null),
-      ]);
+      // Fetch all GCS sources in parallel
+      const [regRes, uploadRes, _trainedRes, trainingStatusRes, gateRes] =
+        await Promise.all([
+          fetch(`${REGISTRY_URL}?${Date.now()}`,                              { cache: "no-store" }),
+          fetch(`${registryFileUrl("last_data_upload.txt")}?${Date.now()}`,   { cache: "no-store" }).catch(() => null),
+          fetch(`${registryFileUrl("last_deployed.txt")}?${Date.now()}`,      { cache: "no-store" }).catch(() => null),
+          fetch(`${registryFileUrl("training_status.txt")}?${Date.now()}`,    { cache: "no-store" }).catch(() => null),
+          fetch(`${registryFileUrl("gate_status.txt")}?${Date.now()}`,        { cache: "no-store" }).catch(() => null),
+        ]);
 
-      if (!regRes.ok) { setBtnState("no_registry"); return; }
+      if (!regRes.ok) { setState("no_registry"); return; }
 
       const regText = await regRes.text();
-      if (!regText.trim()) { setBtnState("no_registry"); return; }
+      if (!regText.trim()) { setState("no_registry"); return; }
 
-      let reg: Registry;
+      let reg: Record<string, unknown>;
       try { reg = JSON.parse(regText); }
-      catch { setBtnState("no_registry"); return; }
-      setModelVersion(reg.latest_version ?? null);
+      catch { setState("no_registry"); return; }
+
+      // Update display values
+      setModelVersion((reg.latest_version as string) ?? null);
       setLastMae(typeof reg.mae === "number" ? reg.mae : null);
 
-      // Get timestamps from both registry JSON and separate lightweight files
-      const regUpload      = reg.last_data_upload;
-      const fileUpload     = uploadRes?.ok ? await uploadRes.text().then(t => t.trim()) : null;
-      const lastUpload     = isAfter(fileUpload, regUpload) ? fileUpload : regUpload;
+      // Read timestamps — prefer separate files, fall back to registry JSON
+      const fileUpload   = uploadRes?.ok  ? (await uploadRes.text()).trim()         : null;
+      const regUpload    = reg.last_data_upload as string | null;
+      const lastUpload   = isAfter(fileUpload, regUpload)  ? fileUpload  : regUpload;
 
-      const regDeployed    = reg.last_deployed;
-      const fileDeployed   = deployedRes?.ok ? await deployedRes.text().then(t => t.trim()) : null;
-      const lastDeployed   = isAfter(fileDeployed, regDeployed) ? fileDeployed : regDeployed;
+      const lastTrained  = reg.last_trained as string | null;
 
-      const lastExport     = localStorage.getItem("lastExportTimestamp");
+      // Training status
+      const trainingStatus = trainingStatusRes?.ok
+        ? (await trainingStatusRes.text()).trim()
+        : null;
+      const training = trainingStatus === "running";
+      setIsTraining(training);
 
-      // Active when new data exists that hasn't been trained + deployed yet
-      const gcsHasNewData     = isAfter(lastUpload,  lastDeployed);
-      const browserHasNewData = lastExport ? isAfter(lastExport, lastDeployed ?? null) : false;
+      // Gate status (developer only)
+      const gate = gateRes?.ok ? (await gateRes.text()).trim() : null;
+      setGateStatus(gate);
 
-      setBtnState(gcsHasNewData || browserHasNewData ? "active" : "current");
+      // ── State machine ─────────────────────────────────────────────────────
+      if (training) {
+        // Training in progress — developer sees spinner, client sees grey+updating
+        setState("training");
+        return;
+      }
+
+      if (IS_DEVELOPER && gate && gate !== "passed" && gate !== "") {
+        // Gate failed or build failed — developer only
+        setState("error");
+        return;
+      }
+
+      // Core logic: purple if new data exists that hasn't been trained on
+      if (isAfter(lastUpload, lastTrained)) {
+        setState("active");
+      } else {
+        setState("current");
+      }
 
     } catch (err) {
       console.warn("useTrainButton: fetch failed", err);
-      setBtnState("current");
+      setState("current");  // degrade silently — never show error to client
     }
   }, []);
 
   useEffect(() => {
-    checkRegistry();
-    const id = setInterval(checkRegistry, POLL_INTERVAL_MS);
+    check();
+    const id = setInterval(check, POLL_MS);
     return () => clearInterval(id);
-  }, [checkRegistry]);
+  }, [check]);
 
   const onTrain = useCallback(() => {
     window.open(COLAB_URL, "_blank", "noopener,noreferrer");
   }, []);
 
-  return { state: btnState, modelVersion, lastMae, onTrain };
+  return { state, modelVersion, lastMae, isTraining, gateStatus, onTrain };
 }

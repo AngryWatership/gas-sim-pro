@@ -34,24 +34,32 @@ export default function BatchControls({
   const train = useTrainButton();
 
   // ── TRAIN button appearance ───────────────────────────────────────────
-  const trainActive  = train.state === "active";
-  const trainLoading = train.state === "loading";
+  const trainActive   = train.state === "active";
+  const trainLoading  = train.state === "loading";
+  const trainTraining = train.state === "training";
+  const trainError    = train.state === "error";
+  const IS_DEV        = import.meta.env.VITE_IS_DEVELOPER === "true";
 
-  const trainLabel = trainLoading
-    ? "⟳ TRAIN …"
-    : train.state === "no_registry"
-      ? "⟳ TRAIN"
-      : trainActive
-        ? "⟳ TRAIN"
-        : "⟳ TRAIN";
+  const trainLabel = trainLoading  ? "⟳ TRAIN …"
+                   : trainTraining ? (IS_DEV ? "⟳ TRAINING…" : "⟳ TRAIN")
+                   : "⟳ TRAIN";
 
   const trainTitle = train.state === "no_registry"
-    ? "Registry not configured — set VITE_GCS_REGISTRY_URL in .env.local once ENV B is set up"
+    ? "Registry not configured — set VITE_GCS_REGISTRY_URL in .env.local"
     : train.state === "current"
       ? `Model is current · version ${train.modelVersion ?? "?"} · MAE ${train.lastMae?.toFixed(2) ?? "?"}`
       : train.state === "active"
         ? "New data available — click to open Colab and retrain"
+      : train.state === "training"
+        ? IS_DEV ? "Training in progress via GitHub Actions…" : "Model is current"
+      : train.state === "error"
+        ? `Gate or build failed — ${train.gateStatus ?? "check logs"}`
         : "Checking registry…";
+
+  // Colour: purple=active, amber=error(dev), grey=all others
+  const trainColor = trainActive   ? "var(--accent)"
+                   : trainError    ? "#ffb347"
+                   : "var(--text-dim)";
 
   return (
     <div style={{ borderBottom: "1px solid var(--border)" }}>
@@ -188,7 +196,7 @@ export default function BatchControls({
               ? `1px solid ${TRAIN_COLOR}60`
               : "1px solid var(--border)",
             background: trainActive ? `${TRAIN_COLOR}15` : "transparent",
-            color: trainActive ? TRAIN_COLOR : "var(--text-dim)",
+            color: trainColor,
             cursor: trainActive ? "pointer" : "not-allowed",
             fontSize: 13, fontFamily: "var(--mono)", letterSpacing: 1,
             opacity: trainLoading ? 0.5 : 1,
@@ -198,6 +206,20 @@ export default function BatchControls({
         >
           {trainLabel}
         </button>
+
+        {/* Training indicator — visible to all users */}
+        {trainTraining && (
+          <div style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: 1, marginTop: 4, textAlign: "center" }}>
+            {IS_DEV ? "⟳ training in progress" : "· updating ·"}
+          </div>
+        )}
+
+        {/* Error indicator — developer only */}
+        {trainError && IS_DEV && (
+          <div style={{ fontSize: 9, color: "#ffb347", letterSpacing: 1, marginTop: 4, textAlign: "center" }}>
+            ⚠ {train.gateStatus ?? "check actions"}
+          </div>
+        )}
 
         {/* No registry hint */}
         {train.state === "no_registry" && (
