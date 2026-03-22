@@ -7,17 +7,17 @@
 
 | Field | Value |
 |---|---|
-| **Active ENV** | D — Cloud Serving |
-| **Current task** | P7 — redeploy both functions · verify full loop end to end |
+| **Active ENV** | V2 Architecture |
+| **Current task** | V2.1 — configure GitHub Secrets · enable Pages · verify build |
 | **Blocked by** | nothing |
-| **Last Git tag** | v1.3.0 |
-| **Last session** | 2026-03-15 |
+| **Last Git tag** | v1.5.0 |
+| **Last session** | 2026-03-16 |
 
 ---
 
 ## Next session starts with
 
-P7 — run git.sh · redeploy ingest-ndjson + deploy-model · upload fresh NDJSON · verify TRAIN button deactivates
+V2.1 — follow V2.1-github-setup.md · Step 1: enable Pages · Step 2: create service account · Step 3: add secrets · Step 5: push and verify
 
 ---
 
@@ -29,8 +29,8 @@ P7 — run git.sh · redeploy ingest-ndjson + deploy-model · upload fresh NDJSO
 | **B** | Data engineering (GCP) | ✅ Gates passed |
 | **C** | ML — Google Colab | ✅ Gates passed |
 | **D** | Cloud serving | ✅ Gates passed |
-| **E** | MLOps loop | 🔵 In progress |
-| **Polish** | P8 — model card, README, demo | ⚪ Not started |
+| **E** | MLOps loop | ✅ Gates passed — pipeline healthy, all 7 layers green |
+| **V2** | Architecture v2 — full automation | 🔵 In progress |
 | **Integration** | Full pipeline wiring | ⚪ Not started |
 
 ---
@@ -45,7 +45,19 @@ P7 — run git.sh · redeploy ingest-ndjson + deploy-model · upload fresh NDJSO
 - [x] P5 — Cloud Run live · /health 200 · /predict returns polygon · CORS ok
 - [x] P6 — useInference wired · status indicator · build clean
 - [x] GCS rate limit diagnosed — threshold n=8, recovery 14-110s, separate file = 13/13 ✅
-- [ ] P7 — redeploy both functions · full loop confirmed · TRAIN button deactivates
+- [x] All 7 diagnostic layers passing
+- [x] diagnostics.sh built — self-healing, layered, responsibility attribution
+- [x] P7 — deploy function fires · MAE gate correct · separate file architecture working
+- [x] ARCHITECTURE-V2.md written · EXPERIMENT-MULTILEAK.md written
+- [x] v1.5.0 tagged
+- [ ] V2.1 — GitHub Pages auto-deploy
+- [ ] V2.2 — GitHub Secrets configured
+- [ ] V2.3 — train.yml GitHub Actions training
+- [ ] V2.4 — incremental XGBoost training
+- [ ] V2.5 — ingest-http Cloud Function
+- [ ] V2.6 — Web Worker HTTP POST
+- [ ] V2.7 — Pyodide training worker
+- [ ] V2.8 — TRAIN button GCS-only state logic
 - [ ] Integration — full loop timed · chaos tests passed
 
 ---
@@ -59,6 +71,8 @@ P7 — run git.sh · redeploy ingest-ndjson + deploy-model · upload fresh NDJSO
 | 2026-03-15 | P6 useInference · status indicator · build clean · ENV D complete | P7 MLOps |
 | 2026-03-15 | P7 deploy function written · ENV-E-P7-mlops.md ready | deploy + test |
 | 2026-03-15 | GCS rate limit diagnosed · separate file architecture validated · 13/13 writes succeed | redeploy functions |
+| 2026-03-16 | All 7 diagnostic layers green · diagnostics.sh · 15/15 tests pass · pipeline healthy | deploy function full cycle |
+| 2026-03-16 | ARCHITECTURE-V2.md · EXPERIMENT-MULTILEAK.md · v1.5.0 tagged | V2 implementation |
 
 ---
 
