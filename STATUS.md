@@ -8,16 +8,16 @@
 | Field | Value |
 |---|---|
 | **Active ENV** | V2 — Full Automation |
-| **Current task** | V2.8 — TRAIN button GCS-only state logic |
+| **Current task** | V2.10 — fix Parquet (1.16M rows) · Optuna tuning · multi-leak data gen |
 | **Blocked by** | nothing |
-| **Last Git tag** | v1.5.0 (v2.0.0 pending) |
-| **Last session** | 2026-03-22 |
+| **Last Git tag** | v2.0.0 |
+| **Last session** | 2026-03-23 |
 
 ---
 
 ## Next session starts with
 
-V2.8 — fix useTrainButton.ts to use GCS-only timestamps · remove localStorage dependency
+V2.10 — cloud.sh option 8 with 1.16M rows · verify Cell 3 loads 900k+ · retrain · add Optuna
 
 ---
 
@@ -57,7 +57,10 @@ V2.8 — fix useTrainButton.ts to use GCS-only timestamps · remove localStorage
 - [x] V2.5 — ingest-http deployed · direct browser→BQ upload working ✅
 - [x] V2.6 — App.tsx updated · NDJSON POSTs directly to cloud · fallback to download
 - [ ] V2.7 — Pyodide training worker (after V2.8)
-- [ ] V2.8 — TRAIN button GCS-only · remove localStorage · training_status.txt states
+- [x] V2.8 — TRAIN button GCS-only · deployed/rejected flash states · immediate grey on click
+- [x] train.ipynb rebuilt clean · W&B offline · gate advisory · GATE_STATUS flag · last_training_result.json
+- [x] V2.9 — 1.16M rows generated · full pipeline loop confirmed end to end · v2.0.0
+- [ ] V2.10 — fix Parquet stale (145k vs 1.16M) · Optuna hyperparameter search · multi-leak data gen
 - [ ] Integration — full loop timed · chaos tests passed
 
 ---
@@ -74,6 +77,8 @@ V2.8 — fix useTrainButton.ts to use GCS-only timestamps · remove localStorage
 | 2026-03-16 | All 7 diagnostic layers green · diagnostics.sh · 15/15 tests pass · pipeline healthy | deploy function full cycle |
 | 2026-03-16 | ARCHITECTURE-V2.md · EXPERIMENT-MULTILEAK.md · v1.5.0 tagged | V2 implementation |
 | 2026-03-22 | V2.1-V2.6 complete · Pages live · ingest-http · direct upload working | V2.8 TRAIN button |
+| 2026-03-22 | V2.8 complete · train.ipynb rebuilt · gate advisory · flash states | V2.9 data + retrain |
+| 2026-03-23 | V2.9 — 1.16M rows · full loop confirmed · MAE worse (stale Parquet 145k) | Parquet fix + Optuna |
 
 ---
 
