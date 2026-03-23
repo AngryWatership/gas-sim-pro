@@ -217,6 +217,28 @@ select
     coalesce(top3_col, 50.0)      as top3_col,
     coalesce(top3_reading, 0.0)   as top3_reading,
 
+    -- Triangulation features derived from top-3 sensors
+    safe_divide(
+        top1_row * coalesce(top1_reading,0) +
+        top2_row * coalesce(top2_reading,0) +
+        top3_row * coalesce(top3_reading,0),
+        nullif(coalesce(top1_reading,0) + coalesce(top2_reading,0) + coalesce(top3_reading,0), 0)
+    )                                                           as top3_centroid_row,
+    safe_divide(
+        top1_col * coalesce(top1_reading,0) +
+        top2_col * coalesce(top2_reading,0) +
+        top3_col * coalesce(top3_reading,0),
+        nullif(coalesce(top1_reading,0) + coalesce(top2_reading,0) + coalesce(top3_reading,0), 0)
+    )                                                           as top3_centroid_col,
+    safe_divide(
+        coalesce(top1_reading,0),
+        nullif(coalesce(top2_reading,0), 0)
+    )                                                           as t1_t2_ratio,
+    safe_divide(
+        coalesce(top1_reading,0),
+        nullif(coalesce(top3_reading,0), 0)
+    )                                                           as t1_t3_ratio,
+
     -- Multi-leak input features
     n_leaks,
     coalesce(target_centroid_row, 50.0)     as leaks_centroid_row,
