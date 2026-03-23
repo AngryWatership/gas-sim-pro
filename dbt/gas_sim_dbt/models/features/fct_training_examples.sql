@@ -12,60 +12,137 @@ with base as (
 
 -- Pre-compute wall/door layout features per (layout_id, config_hash)
 -- Walls stored as flat cell indices: cell_idx = row * 100 + col
+-- Grid is 100x100 = 10000 cells total
 walls_base as (
     select
         layout_id,
         config_hash,
+
         -- Count features
-        ARRAY_LENGTH(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as n_walls,
-        ARRAY_LENGTH(JSON_EXTRACT_ARRAY(TO_JSON_STRING(doors_arr))) as n_doors,
+        n_walls,
+        n_doors,
 
-        -- Wall centroid — mean row and col of all wall cells
-        (
-            select avg(cast(w as int64) / 100)
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
-        ) as wall_centroid_row,
-        (
-            select avg(mod(cast(w as int64), 100))
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
-        ) as wall_centroid_col,
+        -- Density features
+        safe_divide(n_walls, 10000.0)                                   as wall_density,
+        safe_divide(10000.0 - n_walls - n_doors, 10000.0)               as open_path_ratio,
 
-        -- Wall spread — std dev of wall positions (compact room vs long corridor)
-        (
-            select stddev_samp(cast(w as int64) / 100)
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
-        ) as wall_spread_row,
-        (
-            select stddev_samp(mod(cast(w as int64), 100))
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
-        ) as wall_spread_col,
+        -- Wall centroid
+        wall_centroid_row,
+        wall_centroid_col,
 
-        -- Wall density per quadrant (grid split into 4 quadrants at 50,50)
-        (
-            select countif(cast(w as int64) / 100 < 50 and mod(cast(w as int64),100) < 50)
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
-        ) as walls_q1,  -- top-left
-        (
-            select countif(cast(w as int64) / 100 < 50 and mod(cast(w as int64),100) >= 50)
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
-        ) as walls_q2,  -- top-right
-        (
-            select countif(cast(w as int64) / 100 >= 50 and mod(cast(w as int64),100) < 50)
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
-        ) as walls_q3,  -- bottom-left
-        (
-            select countif(cast(w as int64) / 100 >= 50 and mod(cast(w as int64),100) >= 50)
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
-        ) as walls_q4   -- bottom-right
+        -- Wall spread (compact room vs long corridor)
+        wall_spread_row,
+        wall_spread_col,
+
+        -- Wall density per quadrant
+        walls_q1, walls_q2, walls_q3, walls_q4
 
     from (
+        select
+            layout_id,
+            config_hash,
+            ARRAY_LENGTH(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr)))  as n_walls,
+            ARRAY_LENGTH(JSON_EXTRACT_ARRAY(TO_JSON_STRING(doors_arr)))  as n_doors,
+            (select avg(cast(w as int64) / 100)
+             from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
+            )                                                             as wall_centroid_row,
+            (select avg(mod(cast(w as int64), 100))
+             from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
+            )                                                             as wall_centroid_col,
+            (select stddev_samp(cast(w as int64) / 100)
+             from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
+            )                                                             as wall_spread_row,
+            (select stddev_samp(mod(cast(w as int64), 100))
+             from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
+            )                                                             as wall_spread_col,
+            (select countif(cast(w as int64) / 100 < 50
+                         and mod(cast(w as int64),100) < 50)
+             from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
+            )                                                             as walls_q1,
+            (select countif(cast(w as int64) / 100 < 50
+                         and mod(cast(w as int64),100) >= 50)
+             from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
+            )                                                             as walls_q2,
+            (select countif(cast(w as int64) / 100 >= 50
+                         and mod(cast(w as int64),100) < 50)
+             from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
+            )                                                             as walls_q3,
+            (select countif(cast(w as int64) / 100 >= 50
+                         and mod(cast(w as int64),100) >= 50)
+             from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
+            )                                                             as walls_q4
+        from (
+            select layout_id, config_hash,
+                   any_value(walls_arr) as walls_arr,
+                   any_value(doors_arr) as doors_arr
+            from {{ ref('stg_simulation_ticks') }}
+            where walls_arr is not null
+            group by layout_id, config_hash
+        )
+    )
+),
+
+-- Compute per-tick wall proximity features using aggregated sensor centroid
+-- walls_near_centroid and walls_blocking_top1 require tick-level centroid
+-- so they are computed in a separate CTE after aggregation
+walls_proximity as (
+    select
+        a.source, a.seed, a.layout_id, a.config_hash, a.tick,
+
+        -- walls_near_centroid: wall cells within radius 10 of weighted sensor centroid
+        (
+            select countif(
+                pow(cast(w as int64) / 100 - a.centroid_row, 2) +
+                pow(mod(cast(w as int64), 100) - a.centroid_col, 2) <= 100.0
+            )
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(wb.walls_arr))) as w
+        )                                                                   as walls_near_centroid,
+
+        -- walls_blocking_top1: walls on the line segment between top1 sensor and centroid
+        -- Approximated as walls within distance 5 of the midpoint of that segment
+        (
+            select countif(
+                pow(cast(w as int64) / 100
+                    - (m.top1_row + a.centroid_row) / 2.0, 2) +
+                pow(mod(cast(w as int64), 100)
+                    - (m.top1_col + a.centroid_col) / 2.0, 2) <= 25.0
+            )
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(wb.walls_arr))) as w
+        )                                                                   as walls_blocking_top1
+
+    from (
+        -- Re-aggregate centroid and top1 position per tick
+        select
+            b2.source, b2.seed, b2.layout_id, b2.config_hash, b2.tick,
+            safe_divide(sum(b2.sensor_row * b2.sensor_reading),
+                        nullif(sum(b2.sensor_reading), 0))   as centroid_row,
+            safe_divide(sum(b2.sensor_col * b2.sensor_reading),
+                        nullif(sum(b2.sensor_reading), 0))   as centroid_col
+        from {{ ref('stg_simulation_ticks') }} b2
+        group by b2.source, b2.seed, b2.layout_id, b2.config_hash, b2.tick
+    ) a
+    join (
+        -- Top1 sensor position per tick
+        select source, seed, layout_id, config_hash, tick,
+               max(case when rn=1 then sensor_row end) as top1_row,
+               max(case when rn=1 then sensor_col end) as top1_col
+        from (
+            select *,
+                row_number() over (
+                    partition by source, seed, layout_id, config_hash, tick
+                    order by sensor_reading desc
+                ) as rn
+            from {{ ref('stg_simulation_ticks') }}
+        )
+        group by source, seed, layout_id, config_hash, tick
+    ) m using (source, seed, layout_id, config_hash, tick)
+    join (
         select layout_id, config_hash,
-               any_value(walls_arr) as walls_arr,
-               any_value(doors_arr) as doors_arr
+               any_value(walls_arr) as walls_arr
         from {{ ref('stg_simulation_ticks') }}
         where walls_arr is not null
         group by layout_id, config_hash
-    )
+    ) wb using (layout_id, config_hash)
 ),
 
 -- Pre-compute top-3 sensors by reading per tick
@@ -279,17 +356,21 @@ select
     max_reading_row,
     max_reading_col,
 
-    -- Wall/door layout features (10)
-    coalesce(n_walls, 0)              as n_walls,
-    coalesce(n_doors, 0)              as n_doors,
-    coalesce(wall_centroid_row, 50.0) as wall_centroid_row,
-    coalesce(wall_centroid_col, 50.0) as wall_centroid_col,
-    coalesce(wall_spread_row, 0)      as wall_spread_row,
-    coalesce(wall_spread_col, 0)      as wall_spread_col,
-    coalesce(walls_q1, 0)             as walls_q1,
-    coalesce(walls_q2, 0)             as walls_q2,
-    coalesce(walls_q3, 0)             as walls_q3,
-    coalesce(walls_q4, 0)             as walls_q4,
+    -- Wall/door layout features — full Approach A (14)
+    coalesce(n_walls, 0)                       as n_walls,
+    coalesce(n_doors, 0)                       as n_doors,
+    coalesce(wb.wall_density, 0)               as wall_density,
+    coalesce(wb.open_path_ratio, 1.0)          as open_path_ratio,
+    coalesce(wb.wall_centroid_row, 50.0)       as wall_centroid_row,
+    coalesce(wb.wall_centroid_col, 50.0)       as wall_centroid_col,
+    coalesce(wb.wall_spread_row, 0)            as wall_spread_row,
+    coalesce(wb.wall_spread_col, 0)            as wall_spread_col,
+    coalesce(wb.walls_q1, 0)                   as walls_q1,
+    coalesce(wb.walls_q2, 0)                   as walls_q2,
+    coalesce(wb.walls_q3, 0)                   as walls_q3,
+    coalesce(wb.walls_q4, 0)                   as walls_q4,
+    coalesce(wp.walls_near_centroid, 0)        as walls_near_centroid,
+    coalesce(wp.walls_blocking_top1, 0)        as walls_blocking_top1,
 
     -- Top-3 individual sensor positions and readings
     coalesce(top1_row, 50.0)      as top1_row,
@@ -346,8 +427,14 @@ select
     coalesce(target_nearest_col, 50.0)      as target_nearest_col,
     n_leaks                                 as target_n_leaks
 
-from with_nearest
+from with_nearest wn
+left join walls_proximity wp
+    on  wn.source      = wp.source
+    and wn.seed        = wp.seed
+    and wn.layout_id   = wp.layout_id
+    and wn.config_hash = wp.config_hash
+    and wn.tick        = wp.tick
 where
-    target_centroid_row is not null
-    and target_centroid_col is not null
-    and sensor_delta > 0
+    wn.target_centroid_row is not null
+    and wn.target_centroid_col is not null
+    and wn.sensor_delta > 0

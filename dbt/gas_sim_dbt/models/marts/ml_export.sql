@@ -33,11 +33,13 @@ select
     top2_row, top2_col, top2_reading,
     top3_row, top3_col, top3_reading,
 
-    -- Wall/door layout features (10)
+    -- Wall/door layout features — full Approach A (14)
     n_walls, n_doors,
+    wall_density, open_path_ratio,
     wall_centroid_row, wall_centroid_col,
     wall_spread_row, wall_spread_col,
     walls_q1, walls_q2, walls_q3, walls_q4,
+    walls_near_centroid, walls_blocking_top1,
 
     -- Triangulation features (8)
     top3_centroid_row,
