@@ -62,12 +62,12 @@ def export():
     reg["feature_version"]   = new_version
     reg["last_data_upload"]  = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
+    # Set cache-control inline during upload — avoids stale generation mismatch
+    reg_blob.cache_control = "no-cache, no-store, max-age=0"
     reg_blob.upload_from_string(
         json.dumps(reg, indent=2),
         content_type="application/json",
     )
-    reg_blob.cache_control = "no-cache, no-store, max-age=0"
-    reg_blob.patch()
 
     print(f"Registry updated — feature_version: {new_version}")
     print("P3.5 complete. Colab can now read:")

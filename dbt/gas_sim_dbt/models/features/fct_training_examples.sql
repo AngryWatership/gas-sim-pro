@@ -10,6 +10,61 @@ with base as (
     select * from {{ ref('stg_simulation_ticks') }}
 ),
 
+-- Pre-compute wall/door layout features per (layout_id, config_hash)
+-- Walls stored as flat cell indices: cell_idx = row * 100 + col
+walls_base as (
+    select
+        layout_id,
+        config_hash,
+        -- Count features
+        ARRAY_LENGTH(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as n_walls,
+        ARRAY_LENGTH(JSON_EXTRACT_ARRAY(TO_JSON_STRING(doors))) as n_doors,
+
+        -- Wall centroid — mean row and col of all wall cells
+        (
+            select avg(cast(w as int64) / 100)
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+        ) as wall_centroid_row,
+        (
+            select avg(mod(cast(w as int64), 100))
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+        ) as wall_centroid_col,
+
+        -- Wall spread — std dev of wall positions (compact room vs long corridor)
+        (
+            select stddev_samp(cast(w as int64) / 100)
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+        ) as wall_spread_row,
+        (
+            select stddev_samp(mod(cast(w as int64), 100))
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+        ) as wall_spread_col,
+
+        -- Wall density per quadrant (grid split into 4 quadrants at 50,50)
+        (
+            select countif(cast(w as int64) / 100 < 50 and mod(cast(w as int64),100) < 50)
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+        ) as walls_q1,  -- top-left
+        (
+            select countif(cast(w as int64) / 100 < 50 and mod(cast(w as int64),100) >= 50)
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+        ) as walls_q2,  -- top-right
+        (
+            select countif(cast(w as int64) / 100 >= 50 and mod(cast(w as int64),100) < 50)
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+        ) as walls_q3,  -- bottom-left
+        (
+            select countif(cast(w as int64) / 100 >= 50 and mod(cast(w as int64),100) >= 50)
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+        ) as walls_q4   -- bottom-right
+
+    from (
+        select distinct layout_id, config_hash, walls, doors
+        from {{ ref('stg_simulation_ticks') }}
+        where walls is not null
+    )
+),
+
 -- Pre-compute top-3 sensors by reading per tick
 ranked_sensors as (
     select *,
@@ -86,6 +141,18 @@ aggregated as (
         any_value(m.max_reading_row)                                           as max_reading_row,
         any_value(m.max_reading_col)                                           as max_reading_col,
 
+        -- Wall/door layout features
+        any_value(wb.n_walls)                                                  as n_walls,
+        any_value(wb.n_doors)                                                  as n_doors,
+        any_value(wb.wall_centroid_row)                                        as wall_centroid_row,
+        any_value(wb.wall_centroid_col)                                        as wall_centroid_col,
+        any_value(wb.wall_spread_row)                                          as wall_spread_row,
+        any_value(wb.wall_spread_col)                                          as wall_spread_col,
+        any_value(wb.walls_q1)                                                 as walls_q1,
+        any_value(wb.walls_q2)                                                 as walls_q2,
+        any_value(wb.walls_q3)                                                 as walls_q3,
+        any_value(wb.walls_q4)                                                 as walls_q4,
+
         -- Top-3 sensors by reading value
         any_value(t3.top1_row)                                                 as top1_row,
         any_value(t3.top1_col)                                                 as top1_col,
@@ -110,6 +177,9 @@ aggregated as (
         and b.layout_id   = t3.layout_id
         and b.config_hash = t3.config_hash
         and b.tick        = t3.tick
+    left join walls_base wb
+        on  b.layout_id   = wb.layout_id
+        and b.config_hash = wb.config_hash
     group by b.source, b.seed, b.layout_id, b.config_hash, b.tick,
              b.wind_x, b.wind_y, b.diffusion_rate, b.decay_factor,
              b.leak_injection, b.uploaded_at
@@ -205,6 +275,18 @@ select
     max_reading,
     max_reading_row,
     max_reading_col,
+
+    -- Wall/door layout features (10)
+    coalesce(n_walls, 0)              as n_walls,
+    coalesce(n_doors, 0)              as n_doors,
+    coalesce(wall_centroid_row, 50.0) as wall_centroid_row,
+    coalesce(wall_centroid_col, 50.0) as wall_centroid_col,
+    coalesce(wall_spread_row, 0)      as wall_spread_row,
+    coalesce(wall_spread_col, 0)      as wall_spread_col,
+    coalesce(walls_q1, 0)             as walls_q1,
+    coalesce(walls_q2, 0)             as walls_q2,
+    coalesce(walls_q3, 0)             as walls_q3,
+    coalesce(walls_q4, 0)             as walls_q4,
 
     -- Top-3 individual sensor positions and readings
     coalesce(top1_row, 50.0)      as top1_row,
