@@ -17,51 +17,54 @@ walls_base as (
         layout_id,
         config_hash,
         -- Count features
-        ARRAY_LENGTH(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as n_walls,
-        ARRAY_LENGTH(JSON_EXTRACT_ARRAY(TO_JSON_STRING(doors))) as n_doors,
+        ARRAY_LENGTH(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as n_walls,
+        ARRAY_LENGTH(JSON_EXTRACT_ARRAY(TO_JSON_STRING(doors_arr))) as n_doors,
 
         -- Wall centroid — mean row and col of all wall cells
         (
             select avg(cast(w as int64) / 100)
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
         ) as wall_centroid_row,
         (
             select avg(mod(cast(w as int64), 100))
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
         ) as wall_centroid_col,
 
         -- Wall spread — std dev of wall positions (compact room vs long corridor)
         (
             select stddev_samp(cast(w as int64) / 100)
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
         ) as wall_spread_row,
         (
             select stddev_samp(mod(cast(w as int64), 100))
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
         ) as wall_spread_col,
 
         -- Wall density per quadrant (grid split into 4 quadrants at 50,50)
         (
             select countif(cast(w as int64) / 100 < 50 and mod(cast(w as int64),100) < 50)
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
         ) as walls_q1,  -- top-left
         (
             select countif(cast(w as int64) / 100 < 50 and mod(cast(w as int64),100) >= 50)
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
         ) as walls_q2,  -- top-right
         (
             select countif(cast(w as int64) / 100 >= 50 and mod(cast(w as int64),100) < 50)
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
         ) as walls_q3,  -- bottom-left
         (
             select countif(cast(w as int64) / 100 >= 50 and mod(cast(w as int64),100) >= 50)
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls))) as w
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(walls_arr))) as w
         ) as walls_q4   -- bottom-right
 
     from (
-        select distinct layout_id, config_hash, walls, doors
+        select layout_id, config_hash,
+               any_value(walls_arr) as walls_arr,
+               any_value(doors_arr) as doors_arr
         from {{ ref('stg_simulation_ticks') }}
-        where walls is not null
+        where walls_arr is not null
+        group by layout_id, config_hash
     )
 ),
 

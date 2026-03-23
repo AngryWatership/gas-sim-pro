@@ -4,7 +4,12 @@
 -- Used for the multi-leak chained model experiment only.
 
 with base as (
-    select * from {{ ref('stg_simulation_ticks') }}
+    select
+        source, seed, layout_id, config_hash, tick,
+        wind_x, wind_y, diffusion_rate, decay_factor, leak_injection, uploaded_at,
+        locked_dimensions, leaks_arr,
+        sensor_row, sensor_col, sensor_reading, sensor_index
+    from {{ ref('stg_simulation_ticks') }}
 ),
 
 aggregated as (
