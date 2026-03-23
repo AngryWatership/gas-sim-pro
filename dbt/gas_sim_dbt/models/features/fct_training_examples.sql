@@ -22,10 +22,6 @@ walls_base as (
         n_walls,
         n_doors,
 
-        -- Density features
-        safe_divide(n_walls, 10000.0)                                   as wall_density,
-        safe_divide(10000.0 - n_walls - n_doors, 10000.0)               as open_path_ratio,
-
         -- Wall centroid
         wall_centroid_row,
         wall_centroid_col,
@@ -95,11 +91,10 @@ walls_proximity as (
                 pow(cast(w as int64) / 100 - a.centroid_row, 2) +
                 pow(mod(cast(w as int64), 100) - a.centroid_col, 2) <= 100.0
             )
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(wb.walls_arr))) as w
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(wl.walls_arr))) as w
         )                                                                   as walls_near_centroid,
 
-        -- walls_blocking_top1: walls on the line segment between top1 sensor and centroid
-        -- Approximated as walls within distance 5 of the midpoint of that segment
+        -- walls_blocking_top1: walls near midpoint between top1 sensor and sensor centroid
         (
             select countif(
                 pow(cast(w as int64) / 100
@@ -107,7 +102,7 @@ walls_proximity as (
                 pow(mod(cast(w as int64), 100)
                     - (m.top1_col + a.centroid_col) / 2.0, 2) <= 25.0
             )
-            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(wb.walls_arr))) as w
+            from unnest(JSON_EXTRACT_ARRAY(TO_JSON_STRING(wl.walls_arr))) as w
         )                                                                   as walls_blocking_top1
 
     from (
@@ -142,7 +137,7 @@ walls_proximity as (
         from {{ ref('stg_simulation_ticks') }}
         where walls_arr is not null
         group by layout_id, config_hash
-    ) wb using (layout_id, config_hash)
+    ) wl using (layout_id, config_hash)
 ),
 
 -- Pre-compute top-3 sensors by reading per tick
@@ -224,6 +219,9 @@ aggregated as (
         -- Wall/door layout features
         any_value(wb.n_walls)                                                  as n_walls,
         any_value(wb.n_doors)                                                  as n_doors,
+        safe_divide(any_value(wb.n_walls), 10000.0)                            as wall_density,
+        safe_divide(10000.0 - any_value(wb.n_walls) - any_value(wb.n_doors),
+                    10000.0)                                                    as open_path_ratio,
         any_value(wb.wall_centroid_row)                                        as wall_centroid_row,
         any_value(wb.wall_centroid_col)                                        as wall_centroid_col,
         any_value(wb.wall_spread_row)                                          as wall_spread_row,
@@ -333,99 +331,100 @@ with_nearest as (
 )
 
 select
-    source, seed, layout_id, config_hash, locked_dimensions, tick, uploaded_at,
+    wn.source, wn.seed, wn.layout_id, wn.config_hash,
+    wn.locked_dimensions, wn.tick, wn.uploaded_at,
 
     -- Input features (sensor-derived)
-    sensor_delta,
-    sensor_mean,
-    coalesce(reading_variance, 0)           as reading_variance,
-    coalesce(centroid_row, 50.0)            as centroid_row,
-    coalesce(centroid_col, 50.0)            as centroid_col,
-    coverage_ratio,
-    wind_angle,
-    wind_magnitude,
-    coalesce(distance_to_boundary, 0)       as distance_to_boundary,
-    wind_x,
-    wind_y,
-    diffusion_rate,
-    decay_factor,
-    leak_injection,
-    sensor_count,
-    n_sensors_above_threshold,
-    max_reading,
-    max_reading_row,
-    max_reading_col,
+    wn.sensor_delta,
+    wn.sensor_mean,
+    coalesce(wn.reading_variance, 0)           as reading_variance,
+    coalesce(wn.centroid_row, 50.0)            as centroid_row,
+    coalesce(wn.centroid_col, 50.0)            as centroid_col,
+    wn.coverage_ratio,
+    wn.wind_angle,
+    wn.wind_magnitude,
+    coalesce(wn.distance_to_boundary, 0)       as distance_to_boundary,
+    wn.wind_x,
+    wn.wind_y,
+    wn.diffusion_rate,
+    wn.decay_factor,
+    wn.leak_injection,
+    wn.sensor_count,
+    wn.n_sensors_above_threshold,
+    wn.max_reading,
+    wn.max_reading_row,
+    wn.max_reading_col,
 
     -- Wall/door layout features — full Approach A (14)
-    coalesce(n_walls, 0)                       as n_walls,
-    coalesce(n_doors, 0)                       as n_doors,
-    coalesce(wb.wall_density, 0)               as wall_density,
-    coalesce(wb.open_path_ratio, 1.0)          as open_path_ratio,
-    coalesce(wb.wall_centroid_row, 50.0)       as wall_centroid_row,
-    coalesce(wb.wall_centroid_col, 50.0)       as wall_centroid_col,
-    coalesce(wb.wall_spread_row, 0)            as wall_spread_row,
-    coalesce(wb.wall_spread_col, 0)            as wall_spread_col,
-    coalesce(wb.walls_q1, 0)                   as walls_q1,
-    coalesce(wb.walls_q2, 0)                   as walls_q2,
-    coalesce(wb.walls_q3, 0)                   as walls_q3,
-    coalesce(wb.walls_q4, 0)                   as walls_q4,
+    coalesce(wn.n_walls, 0)                       as n_walls,
+    coalesce(wn.n_doors, 0)                       as n_doors,
+    coalesce(wn.wall_density, 0)               as wall_density,
+    coalesce(wn.open_path_ratio, 1.0)          as open_path_ratio,
+    coalesce(wn.wall_centroid_row, 50.0)       as wall_centroid_row,
+    coalesce(wn.wall_centroid_col, 50.0)       as wall_centroid_col,
+    coalesce(wn.wall_spread_row, 0)            as wall_spread_row,
+    coalesce(wn.wall_spread_col, 0)            as wall_spread_col,
+    coalesce(wn.walls_q1, 0)                   as walls_q1,
+    coalesce(wn.walls_q2, 0)                   as walls_q2,
+    coalesce(wn.walls_q3, 0)                   as walls_q3,
+    coalesce(wn.walls_q4, 0)                   as walls_q4,
     coalesce(wp.walls_near_centroid, 0)        as walls_near_centroid,
     coalesce(wp.walls_blocking_top1, 0)        as walls_blocking_top1,
 
     -- Top-3 individual sensor positions and readings
-    coalesce(top1_row, 50.0)      as top1_row,
-    coalesce(top1_col, 50.0)      as top1_col,
-    coalesce(top1_reading, 0.0)   as top1_reading,
-    coalesce(top2_row, 50.0)      as top2_row,
-    coalesce(top2_col, 50.0)      as top2_col,
-    coalesce(top2_reading, 0.0)   as top2_reading,
-    coalesce(top3_row, 50.0)      as top3_row,
-    coalesce(top3_col, 50.0)      as top3_col,
-    coalesce(top3_reading, 0.0)   as top3_reading,
+    coalesce(wn.top1_row, 50.0)      as top1_row,
+    coalesce(wn.top1_col, 50.0)      as top1_col,
+    coalesce(wn.top1_reading, 0.0)   as top1_reading,
+    coalesce(wn.top2_row, 50.0)      as top2_row,
+    coalesce(wn.top2_col, 50.0)      as top2_col,
+    coalesce(wn.top2_reading, 0.0)   as top2_reading,
+    coalesce(wn.top3_row, 50.0)      as top3_row,
+    coalesce(wn.top3_col, 50.0)      as top3_col,
+    coalesce(wn.top3_reading, 0.0)   as top3_reading,
 
     -- Triangulation features derived from top-3 sensors
     safe_divide(
-        top1_row * coalesce(top1_reading,0) +
-        top2_row * coalesce(top2_reading,0) +
-        top3_row * coalesce(top3_reading,0),
+        wn.top1_row * coalesce(top1_reading,0) +
+        wn.top2_row * coalesce(top2_reading,0) +
+        wn.top3_row * coalesce(top3_reading,0),
         nullif(coalesce(top1_reading,0) + coalesce(top2_reading,0) + coalesce(top3_reading,0), 0)
     )                                                           as top3_centroid_row,
     safe_divide(
-        top1_col * coalesce(top1_reading,0) +
-        top2_col * coalesce(top2_reading,0) +
-        top3_col * coalesce(top3_reading,0),
+        wn.top1_col * coalesce(top1_reading,0) +
+        wn.top2_col * coalesce(top2_reading,0) +
+        wn.top3_col * coalesce(top3_reading,0),
         nullif(coalesce(top1_reading,0) + coalesce(top2_reading,0) + coalesce(top3_reading,0), 0)
     )                                                           as top3_centroid_col,
     safe_divide(
-        coalesce(top1_reading,0),
-        nullif(coalesce(top2_reading,0), 0)
+        coalesce(wn.top1_reading,0),
+        nullif(coalesce(wn.top2_reading,0), 0)
     )                                                           as t1_t2_ratio,
     safe_divide(
-        coalesce(top1_reading,0),
-        nullif(coalesce(top3_reading,0), 0)
+        coalesce(wn.top1_reading,0),
+        nullif(coalesce(wn.top3_reading,0), 0)
     )                                                           as t1_t3_ratio,
 
     -- Pairwise sensor distances and vectors
-    sqrt(pow(coalesce(top1_row,50) - coalesce(top2_row,50), 2) +
+    sqrt(pow(coalesce(wn.top1_row,50) - coalesce(top2_row,50), 2) +
          pow(coalesce(top1_col,50) - coalesce(top2_col,50), 2)) as t1_t2_dist,
-    sqrt(pow(coalesce(top1_row,50) - coalesce(top3_row,50), 2) +
+    sqrt(pow(coalesce(wn.top1_row,50) - coalesce(top3_row,50), 2) +
          pow(coalesce(top1_col,50) - coalesce(top3_col,50), 2)) as t1_t3_dist,
-    coalesce(top1_row,50) - coalesce(top2_row,50)               as t1_t2_vec_row,
-    coalesce(top1_col,50) - coalesce(top2_col,50)               as t1_t2_vec_col,
+    coalesce(wn.top1_row,50) - coalesce(wn.top2_row,50)               as t1_t2_vec_row,
+    coalesce(wn.top1_col,50) - coalesce(wn.top2_col,50)               as t1_t2_vec_col,
 
     -- Multi-leak input features
-    n_leaks,
-    coalesce(target_centroid_row, 50.0)     as leaks_centroid_row,
-    coalesce(target_centroid_col, 50.0)     as leaks_centroid_col,
-    coalesce(leaks_spread_row, 0)           as leaks_spread_row,
-    coalesce(leaks_spread_col, 0)           as leaks_spread_col,
+    wn.n_leaks,
+    coalesce(wn.target_centroid_row, 50.0)     as leaks_centroid_row,
+    coalesce(wn.target_centroid_col, 50.0)     as leaks_centroid_col,
+    coalesce(wn.leaks_spread_row, 0)           as leaks_spread_row,
+    coalesce(wn.leaks_spread_col, 0)           as leaks_spread_col,
 
     -- Targets
-    coalesce(target_centroid_row, 50.0)     as target_centroid_row,
-    coalesce(target_centroid_col, 50.0)     as target_centroid_col,
-    coalesce(target_nearest_row, 50.0)      as target_nearest_row,
-    coalesce(target_nearest_col, 50.0)      as target_nearest_col,
-    n_leaks                                 as target_n_leaks
+    coalesce(wn.target_centroid_row, 50.0)     as target_centroid_row,
+    coalesce(wn.target_centroid_col, 50.0)     as target_centroid_col,
+    coalesce(wn.target_nearest_row, 50.0)      as target_nearest_row,
+    coalesce(wn.target_nearest_col, 50.0)      as target_nearest_col,
+    wn.n_leaks                                 as target_n_leaks
 
 from with_nearest wn
 left join walls_proximity wp
