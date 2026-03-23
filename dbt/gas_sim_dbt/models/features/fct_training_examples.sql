@@ -239,6 +239,14 @@ select
         nullif(coalesce(top3_reading,0), 0)
     )                                                           as t1_t3_ratio,
 
+    -- Pairwise sensor distances and vectors
+    sqrt(pow(coalesce(top1_row,50) - coalesce(top2_row,50), 2) +
+         pow(coalesce(top1_col,50) - coalesce(top2_col,50), 2)) as t1_t2_dist,
+    sqrt(pow(coalesce(top1_row,50) - coalesce(top3_row,50), 2) +
+         pow(coalesce(top1_col,50) - coalesce(top3_col,50), 2)) as t1_t3_dist,
+    coalesce(top1_row,50) - coalesce(top2_row,50)               as t1_t2_vec_row,
+    coalesce(top1_col,50) - coalesce(top2_col,50)               as t1_t2_vec_col,
+
     -- Multi-leak input features
     n_leaks,
     coalesce(target_centroid_row, 50.0)     as leaks_centroid_row,

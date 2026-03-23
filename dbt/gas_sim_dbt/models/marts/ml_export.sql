@@ -33,11 +33,15 @@ select
     top2_row, top2_col, top2_reading,
     top3_row, top3_col, top3_reading,
 
-    -- Triangulation features (4)
+    -- Triangulation features (8)
     top3_centroid_row,
     top3_centroid_col,
     t1_t2_ratio,
     t1_t3_ratio,
+    t1_t2_dist,
+    t1_t3_dist,
+    t1_t2_vec_row,
+    t1_t2_vec_col,
 
     -- Targets (4)
     target_centroid_row,
