@@ -1,16 +1,13 @@
 """
-ENV D — FastAPI inference service
-Loads three models from GCS on startup:
-  model_centroid.joblib — predicts leak centroid (primary)
-  model_nearest.joblib  — predicts nearest individual leak
-  model_count.joblib    — predicts number of leaks
+gas-sim-pro · FastAPI inference service
+Serves the 34-feature XGBoost model trained in train.ipynb.
+Features must match exactly what Cell 4 produces.
 """
 
 import os
 import json
 import math
 import logging
-
 import joblib
 import numpy as np
 from fastapi import FastAPI, HTTPException
@@ -24,7 +21,7 @@ log = logging.getLogger(__name__)
 PROJECT_ID = os.environ["PROJECT_ID"]
 BUCKET     = os.environ["BUCKET"]
 
-app = FastAPI(title="gas-sim-pro inference", version="2.0.0")
+app = FastAPI(title="gas-sim-pro inference", version="2.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,24 +34,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-FEATURES = [
-    "sensor_delta", "sensor_mean", "reading_variance",
-    "centroid_row", "centroid_col", "coverage_ratio",
-    "wind_angle", "wind_magnitude", "distance_to_boundary",
-    "wind_x", "wind_y", "diffusion_rate", "decay_factor",
-    "leak_injection", "sensor_count",
-    "n_sensors_above_threshold", "max_reading",
-    "max_reading_row", "max_reading_col",
-    "n_leaks",
-    "leaks_centroid_row", "leaks_centroid_col",
-    "leaks_spread_row", "leaks_spread_col",
+# ── Feature order must match Cell 4 exactly ──────────────────────────────
+# Parquet features (in order Cell 4 picks them up)
+PARQUET_FEATURES = [
+    "top1_col", "top1_row",
+    "top3_centroid_row", "top3_centroid_col",
+    "wind_x", "wind_y", "wind_angle",
+    "t1_t2_ratio", "t1_t3_ratio",
+    "coverage_ratio", "centroid_col",
+    "top2_reading", "top3_col", "sensor_mean",
+    "top3_reading", "top2_col",
+    "open_path_ratio", "walls_blocking_top1",
+    "top3_row", "top1_reading",
+    "t1_t2_vec_row", "t1_t2_vec_col",
+    "distance_to_boundary", "wall_density",
+    "t1_t2_dist",
+    "sensor_count",
+    "walls_q1", "wall_spread_row",
+    "reading_variance",
 ]
+# Derived features appended by Cell 4
+DERIVED_FEATURES = [
+    "wind_corr_row", "wind_corr_col",
+    "disp_row", "disp_col",
+    "wall_asymmetry_col", "wall_asymmetry_row",
+]
+ALL_FEATURES = PARQUET_FEATURES + DERIVED_FEATURES
+N_FEATURES   = len(ALL_FEATURES)
 
 _registry = None
-_model_centroid = None
-_model_nearest  = None
-_model_count    = None
-_version = None
+_model    = None
+_version  = None
 
 
 def _load_model(path: str):
@@ -66,33 +76,18 @@ def _load_model(path: str):
 
 @app.on_event("startup")
 def startup():
-    global _registry, _model_centroid, _model_nearest, _model_count, _version
+    global _registry, _model, _version
     gcs = storage.Client(project=PROJECT_ID)
     _registry = json.loads(
         gcs.bucket(BUCKET).blob("model_registry.json").download_as_text()
     )
-    joblib_path = _registry.get("joblib_path") or _registry.get("model_path")
-    if not joblib_path:
+    path = _registry.get("joblib_path") or _registry.get("model_path")
+    if not path:
         raise RuntimeError("No model in registry — run Colab training first")
-
-    base = joblib_path.rsplit("/", 1)[0]
-    _model_centroid = _load_model(f"{base}/model_centroid.joblib")
+    _model   = _load_model(path)
     _version = _registry.get("latest_version", "unknown")
-
-    # Load secondary models if available (graceful fallback)
-    try:
-        _model_nearest = _load_model(f"{base}/model_nearest.joblib")
-    except Exception:
-        log.warning("model_nearest.joblib not found — using centroid for nearest")
-        _model_nearest = _model_centroid
-
-    try:
-        _model_count = _load_model(f"{base}/model_count.joblib")
-    except Exception:
-        log.warning("model_count.joblib not found — count prediction disabled")
-        _model_count = None
-
-    log.info("Serving version: %s  MAE: %s", _version, _registry.get("mae"))
+    log.info("Serving version: %s  MAE: %s  Features: %d",
+             _version, _registry.get("mae"), N_FEATURES)
 
 
 class SensorReading(BaseModel):
@@ -103,112 +98,133 @@ class SensorReading(BaseModel):
 
 class PredictRequest(BaseModel):
     sensor_readings: list[SensorReading]
-    wind_x:          float
-    wind_y:          float
+    wind_x:          float = 0.0
+    wind_y:          float = 0.0
     diffusion_rate:  float = 0.10
     decay_factor:    float = 0.999
     leak_injection:  float = 20.0
-    # Optional hint: known leaks from previous chain call
-    known_leak_row:  float = 0.0
-    known_leak_col:  float = 0.0
+    # Wall info — optional, defaults to open space
+    n_walls:         int   = 0
+    n_doors:         int   = 0
+    wall_density:    float = 0.0
+    open_path_ratio: float = 1.0
+    wall_spread_row: float = 0.0
+    walls_q1:        int   = 0
+    walls_q2:        int   = 0
+    walls_q3:        int   = 0
+    walls_q4:        int   = 0
+    walls_blocking_top1: int = 0
 
 
 class LeakPrediction(BaseModel):
     row:        float
     col:        float
     confidence: float
-    type:       str   # "centroid" | "nearest"
 
 
 class PredictResponse(BaseModel):
-    predicted_polygon:  list[LeakPrediction]
-    predicted_count:    float
-    model_version:      str
-    mae:                float
-    mae_nearest:        float | None
+    predicted_polygon: list[LeakPrediction]
+    model_version:     str
+    mae:               float
 
 
-def _extract_features(req: PredictRequest) -> list[float]:
-    readings = [s.reading for s in req.sensor_readings]
-    rows     = [s.row     for s in req.sensor_readings]
-    cols     = [s.col     for s in req.sensor_readings]
+def _build_features(req: PredictRequest) -> np.ndarray:
+    sensors  = req.sensor_readings
+    readings = [s.reading for s in sensors]
+    rows     = [s.row     for s in sensors]
+    cols     = [s.col     for s in sensors]
     n        = len(readings)
     total    = sum(readings) or 1e-9
-    mean     = total / n
+    mean_r   = total / n
 
-    sensor_delta   = max(readings) - min(readings)
-    reading_var    = sum((r - mean)**2 for r in readings) / max(n - 1, 1)
-    centroid_row   = sum(rows[i] * readings[i] for i in range(n)) / total
-    centroid_col   = sum(cols[i] * readings[i] for i in range(n)) / total
-    coverage       = sum(1 for r in readings if r > 0.01) / n
-    wind_angle     = math.atan2(req.wind_y, req.wind_x)
-    wind_mag       = math.sqrt(req.wind_x**2 + req.wind_y**2)
-    dist_boundary  = min(centroid_row, 100-centroid_row, centroid_col, 100-centroid_col)
-    n_above        = sum(1 for r in readings if r > 0.10)
-    max_reading    = max(readings)
-    max_idx        = readings.index(max_reading)
-    max_row        = rows[max_idx]
-    max_col        = cols[max_idx]
+    sensor_delta    = max(readings) - min(readings)
+    reading_var     = sum((r - mean_r)**2 for r in readings) / max(n - 1, 1)
+    centroid_row    = sum(rows[i]*readings[i] for i in range(n)) / total
+    centroid_col    = sum(cols[i]*readings[i] for i in range(n)) / total
+    coverage_ratio  = sum(1 for r in readings if r > 0.01) / n
+    wind_angle      = math.atan2(req.wind_y, req.wind_x)
+    dist_boundary   = min(centroid_row, 100-centroid_row,
+                          centroid_col, 100-centroid_col)
 
-    return [
-        sensor_delta, mean, reading_var,
-        centroid_row, centroid_col, coverage,
-        wind_angle, wind_mag, dist_boundary,
-        req.wind_x, req.wind_y,
-        req.diffusion_rate, req.decay_factor, req.leak_injection,
-        float(n), float(n_above), max_reading, max_row, max_col,
-        1.0,              # n_leaks — unknown at inference, assume 1 for first call
-        centroid_row,     # leaks_centroid_row — use sensor centroid as proxy
-        centroid_col,     # leaks_centroid_col
-        0.0,              # leaks_spread_row — unknown
-        0.0,              # leaks_spread_col
+    # Sort sensors by reading descending — top1, top2, top3
+    sorted_s = sorted(zip(readings, rows, cols), reverse=True)
+    def get(idx, default_r=50.0, default_c=50.0, default_v=0.0):
+        if idx < len(sorted_s):
+            return sorted_s[idx][1], sorted_s[idx][2], sorted_s[idx][0]
+        return default_r, default_c, default_v
+
+    top1_r, top1_c, top1_v = get(0)
+    top2_r, top2_c, top2_v = get(1)
+    top3_r, top3_c, top3_v = get(2)
+
+    top_total = top1_v + top2_v + top3_v + 1e-9
+    top3_cen_row = (top1_r*top1_v + top2_r*top2_v + top3_r*top3_v) / top_total
+    top3_cen_col = (top1_c*top1_v + top2_c*top2_v + top3_c*top3_v) / top_total
+    t1_t2_ratio  = min(top1_v / (top2_v + 1e-9), 100.0)
+    t1_t3_ratio  = min(top1_v / (top3_v + 1e-9), 100.0)
+    t1_t2_dist   = min(math.sqrt((top1_r-top2_r)**2 + (top1_c-top2_c)**2), 142.0)
+    t1_t2_vec_row = top1_r - top2_r
+    t1_t2_vec_col = top1_c - top2_c
+
+    # Derived
+    wind_corr_row = centroid_row - req.wind_y * 5
+    wind_corr_col = centroid_col - req.wind_x * 5
+    disp_row      = top1_r - centroid_row
+    disp_col      = top1_c - centroid_col
+    wall_asym_col = req.walls_q1 + req.walls_q3 - req.walls_q2 - req.walls_q4
+    wall_asym_row = req.walls_q1 + req.walls_q2 - req.walls_q3 - req.walls_q4
+
+    # Build in exact same order as PARQUET_FEATURES + DERIVED_FEATURES
+    feat = [
+        top1_c, top1_r,                          # top1_col, top1_row
+        top3_cen_row, top3_cen_col,              # top3_centroid_row/col
+        req.wind_x, req.wind_y, wind_angle,      # wind_x, wind_y, wind_angle
+        t1_t2_ratio, t1_t3_ratio,                # ratios
+        coverage_ratio, centroid_col,            # coverage, centroid_col
+        top2_v, top3_c, mean_r,                  # top2_reading, top3_col, sensor_mean
+        top3_v, top2_c,                          # top3_reading, top2_col
+        req.open_path_ratio, req.walls_blocking_top1,  # wall
+        top3_r, top1_v,                          # top3_row, top1_reading
+        t1_t2_vec_row, t1_t2_vec_col,            # vectors
+        dist_boundary, req.wall_density,         # distance, wall_density
+        t1_t2_dist,                              # distance
+        float(n),                                # sensor_count
+        float(req.walls_q1), req.wall_spread_row,  # walls_q1, wall_spread_row
+        reading_var,                             # reading_variance
+        # Derived
+        wind_corr_row, wind_corr_col,
+        disp_row, disp_col,
+        float(wall_asym_col), float(wall_asym_row),
     ]
+
+    assert len(feat) == N_FEATURES, f"Feature count mismatch: {len(feat)} vs {N_FEATURES}"
+    return np.array([feat], dtype=np.float32)
 
 
 @app.get("/health")
 def health():
     return {
-        "status":      "ok",
-        "version":     _version,
-        "mae":         _registry.get("mae") if _registry else None,
-        "mae_nearest": _registry.get("mae_nearest") if _registry else None,
-        "n_models":    sum([
-            _model_centroid is not None,
-            _model_nearest  is not None,
-            _model_count    is not None,
-        ]),
+        "status":  "ok",
+        "version": _version,
+        "mae":     _registry.get("mae") if _registry else None,
+        "n_features": N_FEATURES,
     }
 
 
 @app.post("/predict", response_model=PredictResponse)
 def predict(req: PredictRequest):
-    if _model_centroid is None:
-        raise HTTPException(status_code=503, detail="Models not loaded")
+    if _model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
     if len(req.sensor_readings) < 3:
         raise HTTPException(status_code=400, detail="Need at least 3 sensor readings")
 
-    features = _extract_features(req)
-    X = np.array([features], dtype=np.float32)
-
-    pred_c = _model_centroid.predict(X)[0]
-    pred_n = _model_nearest.predict(X)[0]
-    pred_k = float(_model_count.predict(X)[0]) if _model_count else 1.0
-
-    polygon = [
-        LeakPrediction(
-            row=float(pred_c[0]), col=float(pred_c[1]),
-            confidence=0.9, type="centroid"
-        ),
-        LeakPrediction(
-            row=float(pred_n[0]), col=float(pred_n[1]),
-            confidence=0.7, type="nearest"
-        ),
-    ]
+    X    = _build_features(req)
+    pred = _model.predict(X)[0]
 
     return PredictResponse(
-        predicted_polygon=polygon,
-        predicted_count=round(pred_k),
+        predicted_polygon=[
+            LeakPrediction(row=float(pred[0]), col=float(pred[1]), confidence=0.9)
+        ],
         model_version=_version or "unknown",
         mae=float(_registry.get("mae") or 0.0),
-        mae_nearest=_registry.get("mae_nearest"),
     )
