@@ -147,25 +147,26 @@ class PredictResponse(BaseModel):
 
 def _build_features(req: PredictRequest) -> np.ndarray:
     sensors  = req.sensor_readings
-    readings = [s.reading for s in sensors]
     rows     = [s.row     for s in sensors]
     cols     = [s.col     for s in sensors]
-    n        = len(readings)
+    n        = len(sensors)
+
+    # Normalise readings by max — makes saturated/early ticks comparable to training
+    raw      = [s.reading for s in sensors]
+    max_r    = max(raw) or 1e-9
+    readings = [r / max_r for r in raw]
+
+    total    = sum(readings) or 1e-9
+    mean_r   = total / n
 
     sensor_delta    = max(readings) - min(readings)
     reading_var     = sum((r - mean_r)**2 for r in readings) / max(n - 1, 1)
     centroid_row    = sum(rows[i]*readings[i] for i in range(n)) / total
     centroid_col    = sum(cols[i]*readings[i] for i in range(n)) / total
-    coverage_ratio  = sum(1 for r in readings if r > 0.10) / n  # 0.10 of normalised
+    coverage_ratio  = sum(1 for r in readings if r > 0.10) / n
     wind_angle      = math.atan2(req.wind_y, req.wind_x)
     dist_boundary   = min(centroid_row, 100-centroid_row,
                           centroid_col, 100-centroid_col)
-
-    # Normalise readings by max — makes saturated and early ticks comparable
-    max_reading = max(readings) or 1e-9
-    readings    = [r / max_reading for r in readings]
-    total       = sum(readings) or 1e-9
-    mean_r      = total / n
 
     # Sort sensors by reading descending — top1, top2, top3
     sorted_s = sorted(zip(readings, rows, cols), reverse=True)

@@ -1,0 +1,13 @@
+cd "/mnt/c/Users/PC MAROC/projects/gas-sim-pro"
+git add -A
+git commit -m "fix: ml_export n_leaks → target_n_leaks · fct_training_examples clean rewrite"
+git push origin main
+
+#to push manually after edits
+
+
+git add api/
+git commit -m "fix: API 34-feature model · sklearn 1.6.1 · correct feature extraction"
+git push origin main
+
+#to add a whole folder
