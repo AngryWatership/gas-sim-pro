@@ -34,33 +34,46 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Feature order must match Cell 4 exactly ──────────────────────────────
-# Parquet features (in order Cell 4 picks them up)
-PARQUET_FEATURES = [
-    "top1_col", "top1_row",
-    "top3_centroid_row", "top3_centroid_col",
-    "wind_x", "wind_y", "wind_angle",
-    "t1_t2_ratio", "t1_t3_ratio",
-    "coverage_ratio", "centroid_col",
-    "top2_reading", "top3_col", "sensor_mean",
-    "top3_reading", "top2_col",
-    "open_path_ratio", "walls_blocking_top1",
-    "top3_row", "top1_reading",
-    "t1_t2_vec_row", "t1_t2_vec_col",
-    "distance_to_boundary", "wall_density",
-    "t1_t2_dist",
-    "sensor_count",
-    "walls_q1", "wall_spread_row",
-    "reading_variance",
+# ── Feature order — must match Cell 4 output exactly ────────────────────
+# Verified from registry/feature_order.json written by Cell 10
+ALL_FEATURES = [
+    "top1_col",              #  0
+    "top1_row",              #  1
+    "top3_centroid_row",     #  2
+    "top3_centroid_col",     #  3
+    "wind_x",                #  4
+    "wind_y",                #  5
+    "wind_angle",            #  6
+    "t1_t2_ratio",           #  7
+    "t1_t3_ratio",           #  8
+    "coverage_ratio",        #  9
+    "centroid_col",          # 10
+    "top2_reading",          # 11
+    "top3_col",              # 12
+    "sensor_mean",           # 13
+    "top3_reading",          # 14
+    "top2_col",              # 15
+    "open_path_ratio",       # 16
+    "walls_blocking_top1",   # 17
+    "top3_row",              # 18
+    "top1_reading",          # 19
+    "t1_t2_vec_row",         # 20
+    "t1_t2_vec_col",         # 21
+    "distance_to_boundary",  # 22
+    "wall_density",          # 23
+    "t1_t2_dist",            # 24
+    "sensor_count",          # 25
+    "walls_q1",              # 26
+    "wall_spread_row",       # 27
+    "reading_variance",      # 28
+    "wind_corr_row",         # 29
+    "wind_corr_col",         # 30
+    "disp_row",              # 31
+    "disp_col",              # 32
+    "wall_asymmetry_col",    # 33
+    "wall_asymmetry_row",    # 34
 ]
-# Derived features appended by Cell 4
-DERIVED_FEATURES = [
-    "wind_corr_row", "wind_corr_col",
-    "disp_row", "disp_col",
-    "wall_asymmetry_col", "wall_asymmetry_row",
-]
-ALL_FEATURES = PARQUET_FEATURES + DERIVED_FEATURES
-N_FEATURES   = len(ALL_FEATURES)
+N_FEATURES = len(ALL_FEATURES)  # 35
 
 _registry = None
 _model    = None
@@ -174,27 +187,43 @@ def _build_features(req: PredictRequest) -> np.ndarray:
     wall_asym_col = req.walls_q1 + req.walls_q3 - req.walls_q2 - req.walls_q4
     wall_asym_row = req.walls_q1 + req.walls_q2 - req.walls_q3 - req.walls_q4
 
-    # Build in exact same order as PARQUET_FEATURES + DERIVED_FEATURES
+    # Build vector in exact order matching ALL_FEATURES (verified from feature_order.json)
     feat = [
-        top1_c, top1_r,                          # top1_col, top1_row
-        top3_cen_row, top3_cen_col,              # top3_centroid_row/col
-        req.wind_x, req.wind_y, wind_angle,      # wind_x, wind_y, wind_angle
-        t1_t2_ratio, t1_t3_ratio,                # ratios
-        coverage_ratio, centroid_col,            # coverage, centroid_col
-        top2_v, top3_c, mean_r,                  # top2_reading, top3_col, sensor_mean
-        top3_v, top2_c,                          # top3_reading, top2_col
-        req.open_path_ratio, req.walls_blocking_top1,  # wall
-        top3_r, top1_v,                          # top3_row, top1_reading
-        t1_t2_vec_row, t1_t2_vec_col,            # vectors
-        dist_boundary, req.wall_density,         # distance, wall_density
-        t1_t2_dist,                              # distance
-        float(n),                                # sensor_count
-        float(req.walls_q1), req.wall_spread_row,  # walls_q1, wall_spread_row
-        reading_var,                             # reading_variance
-        # Derived
-        wind_corr_row, wind_corr_col,
-        disp_row, disp_col,
-        float(wall_asym_col), float(wall_asym_row),
+        top1_c,                      #  0 top1_col
+        top1_r,                      #  1 top1_row
+        top3_cen_row,                #  2 top3_centroid_row
+        top3_cen_col,                #  3 top3_centroid_col
+        req.wind_x,                  #  4 wind_x
+        req.wind_y,                  #  5 wind_y
+        wind_angle,                  #  6 wind_angle
+        t1_t2_ratio,                 #  7 t1_t2_ratio
+        t1_t3_ratio,                 #  8 t1_t3_ratio
+        coverage_ratio,              #  9 coverage_ratio
+        centroid_col,                # 10 centroid_col
+        top2_v,                      # 11 top2_reading
+        top3_c,                      # 12 top3_col
+        mean_r,                      # 13 sensor_mean
+        top3_v,                      # 14 top3_reading
+        top2_c,                      # 15 top2_col
+        req.open_path_ratio,         # 16 open_path_ratio
+        float(req.walls_blocking_top1), # 17 walls_blocking_top1
+        top3_r,                      # 18 top3_row
+        top1_v,                      # 19 top1_reading
+        t1_t2_vec_row,               # 20 t1_t2_vec_row
+        t1_t2_vec_col,               # 21 t1_t2_vec_col
+        dist_boundary,               # 22 distance_to_boundary
+        req.wall_density,            # 23 wall_density
+        t1_t2_dist,                  # 24 t1_t2_dist
+        float(n),                    # 25 sensor_count
+        float(req.walls_q1),         # 26 walls_q1
+        req.wall_spread_row,         # 27 wall_spread_row
+        reading_var,                 # 28 reading_variance
+        wind_corr_row,               # 29 wind_corr_row
+        wind_corr_col,               # 30 wind_corr_col
+        disp_row,                    # 31 disp_row
+        disp_col,                    # 32 disp_col
+        float(wall_asym_col),        # 33 wall_asymmetry_col
+        float(wall_asym_row),        # 34 wall_asymmetry_row
     ]
 
     assert len(feat) == N_FEATURES, f"Feature count mismatch: {len(feat)} vs {N_FEATURES}"
