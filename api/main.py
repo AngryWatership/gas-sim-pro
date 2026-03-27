@@ -151,11 +151,8 @@ def _build_features(req: PredictRequest) -> np.ndarray:
     cols     = [s.col     for s in sensors]
     n        = len(sensors)
 
-    # Normalise readings by max — makes saturated/early ticks comparable to training
-    raw      = [s.reading for s in sensors]
-    max_r    = max(raw) or 1e-9
-    readings = [r / max_r for r in raw]
-
+    # NO normalisation — model trained on raw readings from dbt
+    readings = [s.reading for s in sensors]
     total    = sum(readings) or 1e-9
     mean_r   = total / n
 
@@ -182,8 +179,8 @@ def _build_features(req: PredictRequest) -> np.ndarray:
     top_total = top1_v + top2_v + top3_v + 1e-9
     top3_cen_row = (top1_r*top1_v + top2_r*top2_v + top3_r*top3_v) / top_total
     top3_cen_col = (top1_c*top1_v + top2_c*top2_v + top3_c*top3_v) / top_total
-    t1_t2_ratio  = min(top1_v / (top2_v + 1e-9), 100.0)
-    t1_t3_ratio  = min(top1_v / (top3_v + 1e-9), 100.0)
+    t1_t2_ratio  = top1_v / (top2_v + 1e-9)
+    t1_t3_ratio  = top1_v / (top3_v + 1e-9)
     t1_t2_dist   = min(math.sqrt((top1_r-top2_r)**2 + (top1_c-top2_c)**2), 142.0)
     t1_t2_vec_row = top1_r - top2_r
     t1_t2_vec_col = top1_c - top2_c
