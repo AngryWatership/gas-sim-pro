@@ -2,8 +2,7 @@ name: Pipeline diagnostics
 
 on:
   schedule:
-    - cron: '*/30 * * * *'   # smoke tier every 30 min
-    - cron: '0 3 * * *'      # full tier nightly at 3am UTC
+    - cron:    '0 3 * * *'      # full tier nightly at 3am UTC
   workflow_run:
     workflows: ["Train model"]
     types: [completed]        # integration tier after every training run

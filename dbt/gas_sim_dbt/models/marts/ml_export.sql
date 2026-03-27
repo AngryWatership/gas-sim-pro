@@ -42,5 +42,5 @@ where
     and wind_angle          is not null
     and target_centroid_row is not null
     and target_centroid_col is not null
-    and n_leaks = 1
+    and target_n_leaks = 1
     and sensor_delta >= 0.01
