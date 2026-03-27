@@ -110,23 +110,27 @@ class SensorReading(BaseModel):
 
 
 class PredictRequest(BaseModel):
-    sensor_readings: list[SensorReading]
-    wind_x:          float = 0.0
-    wind_y:          float = 0.0
-    diffusion_rate:  float = 0.10
-    decay_factor:    float = 0.999
-    leak_injection:  float = 20.0
-    # Wall info — optional, defaults to open space
-    n_walls:         int   = 0
-    n_doors:         int   = 0
-    wall_density:    float = 0.0
-    open_path_ratio: float = 1.0
-    wall_spread_row: float = 0.0
-    walls_q1:        int   = 0
-    walls_q2:        int   = 0
-    walls_q3:        int   = 0
-    walls_q4:        int   = 0
-    walls_blocking_top1: int = 0
+    sensor_readings:     list[SensorReading]
+    wind_x:              float = 0.0
+    wind_y:              float = 0.0
+    diffusion_rate:      float = 0.10
+    decay_factor:        float = 0.999
+    leak_injection:      float = 20.0
+    # Wall features — computed in useInference.ts from state.blockedCells/doorCells
+    n_walls:             int   = 0
+    n_doors:             int   = 0
+    wall_density:        float = 0.0
+    open_path_ratio:     float = 1.0
+    wall_centroid_row:   float = 50.0
+    wall_centroid_col:   float = 50.0
+    wall_spread_row:     float = 0.0
+    walls_q1:            int   = 0
+    walls_q2:            int   = 0
+    walls_q3:            int   = 0
+    walls_q4:            int   = 0
+    walls_blocking_top1: int   = 0
+    wall_asymmetry_col:  float = 0.0
+    wall_asymmetry_row:  float = 0.0
 
 
 class LeakPrediction(BaseModel):
@@ -147,17 +151,21 @@ def _build_features(req: PredictRequest) -> np.ndarray:
     rows     = [s.row     for s in sensors]
     cols     = [s.col     for s in sensors]
     n        = len(readings)
-    total    = sum(readings) or 1e-9
-    mean_r   = total / n
 
     sensor_delta    = max(readings) - min(readings)
     reading_var     = sum((r - mean_r)**2 for r in readings) / max(n - 1, 1)
     centroid_row    = sum(rows[i]*readings[i] for i in range(n)) / total
     centroid_col    = sum(cols[i]*readings[i] for i in range(n)) / total
-    coverage_ratio  = sum(1 for r in readings if r > 0.01) / n
+    coverage_ratio  = sum(1 for r in readings if r > 0.10) / n  # 0.10 of normalised
     wind_angle      = math.atan2(req.wind_y, req.wind_x)
     dist_boundary   = min(centroid_row, 100-centroid_row,
                           centroid_col, 100-centroid_col)
+
+    # Normalise readings by max — makes saturated and early ticks comparable
+    max_reading = max(readings) or 1e-9
+    readings    = [r / max_reading for r in readings]
+    total       = sum(readings) or 1e-9
+    mean_r      = total / n
 
     # Sort sensors by reading descending — top1, top2, top3
     sorted_s = sorted(zip(readings, rows, cols), reverse=True)
@@ -184,9 +192,6 @@ def _build_features(req: PredictRequest) -> np.ndarray:
     wind_corr_col = centroid_col - req.wind_x * 5
     disp_row      = top1_r - centroid_row
     disp_col      = top1_c - centroid_col
-    wall_asym_col = req.walls_q1 + req.walls_q3 - req.walls_q2 - req.walls_q4
-    wall_asym_row = req.walls_q1 + req.walls_q2 - req.walls_q3 - req.walls_q4
-
     # Build vector in exact order matching ALL_FEATURES (verified from feature_order.json)
     feat = [
         top1_c,                      #  0 top1_col
@@ -205,7 +210,7 @@ def _build_features(req: PredictRequest) -> np.ndarray:
         mean_r,                      # 13 sensor_mean
         top3_v,                      # 14 top3_reading
         top2_c,                      # 15 top2_col
-        req.open_path_ratio,         # 16 open_path_ratio
+        req.open_path_ratio,            # 16 open_path_ratio
         float(req.walls_blocking_top1), # 17 walls_blocking_top1
         top3_r,                      # 18 top3_row
         top1_v,                      # 19 top1_reading
@@ -222,8 +227,8 @@ def _build_features(req: PredictRequest) -> np.ndarray:
         wind_corr_col,               # 30 wind_corr_col
         disp_row,                    # 31 disp_row
         disp_col,                    # 32 disp_col
-        float(wall_asym_col),        # 33 wall_asymmetry_col
-        float(wall_asym_row),        # 34 wall_asymmetry_row
+        req.wall_asymmetry_col,      # 33 wall_asymmetry_col
+        req.wall_asymmetry_row,      # 34 wall_asymmetry_row
     ]
 
     assert len(feat) == N_FEATURES, f"Feature count mismatch: {len(feat)} vs {N_FEATURES}"
@@ -237,6 +242,20 @@ def health():
         "version": _version,
         "mae":     _registry.get("mae") if _registry else None,
         "n_features": N_FEATURES,
+    }
+
+
+@app.post("/debug_features")
+def debug_features(req: PredictRequest):
+    """Returns the feature vector as the API builds it — for debugging."""
+    if _model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+    X    = _build_features(req)
+    feat = X[0].tolist()
+    return {
+        "n_features": len(feat),
+        "features": {ALL_FEATURES[i]: round(float(feat[i]), 4) for i in range(len(feat))},
+        "raw": feat,
     }
 
 
