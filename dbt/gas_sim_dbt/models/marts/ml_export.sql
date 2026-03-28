@@ -18,6 +18,7 @@ select
 
     -- Triangulation (precomputed in fct_training_examples)
     top3_centroid_row, top3_centroid_col,
+    t1_t2_ratio, t1_t3_ratio,
     t1_t2_dist, t1_t3_dist,
     t1_t2_vec_row, t1_t2_vec_col,
 
