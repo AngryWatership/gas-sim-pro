@@ -198,7 +198,7 @@ function generateLeaks(
 ): GasLeak[] {
   if (!cfg.randomiseLeaks && fixedLeaks) return fixedLeaks;
 
-  const count = rng.int(cfg.leakCountMin, cfg.leakCountMax);
+  const count = 1;  // Always generate exactly 1 leak for ML training quality
   const leaks: GasLeak[] = [];
   const MIN_APART = 8;
   const MAX_ATTEMPTS = 80;

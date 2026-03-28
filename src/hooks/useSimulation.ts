@@ -25,9 +25,12 @@ function makeInitialState(): SimulationState {
 type Action =
   | { type: "SET_GRID"; grid: Float32Array }
   | { type: "SET_LEAK"; leak: GasLeak }
+  | { type: "REMOVE_LEAK"; id: string }
   | { type: "ADD_SENSOR"; sensor: Sensor }
+  | { type: "REMOVE_SENSOR"; id: string }
   | { type: "SET_WALL"; indices: number[] }
   | { type: "SET_DOOR"; indices: number[] }
+  | { type: "ERASE"; indices: number[] }
   | { type: "LOAD_LAYOUT"; snapshot: LayoutSnapshot; target: LoadTarget }
   | { type: "RESET" };
 
@@ -70,6 +73,24 @@ function reducer(state: SimulationState, action: Action): SimulationState {
         state = { ...state, gasLeaks: [...state.gasLeaks, ...snapshot.gasLeaks] };
       }
       return state;
+    }
+    case "REMOVE_LEAK":
+      return { ...state, gasLeaks: state.gasLeaks.filter((l) => l.id !== action.id) };
+    case "REMOVE_SENSOR":
+      return { ...state, sensors: state.sensors.filter((s) => s.id !== action.id) };
+    case "ERASE": {
+      const blocked = new Uint8Array(state.blockedCells);
+      const doors   = new Uint8Array(state.doorCells);
+      action.indices.forEach((i) => { blocked[i] = 0; doors[i] = 0; });
+      // Remove leaks and sensors whose cell is in the erased indices
+      const erased  = new Set(action.indices);
+      const gasLeaks = state.gasLeaks.filter(
+        (l) => !erased.has(l.row * state.dimensions.cols + l.col)
+      );
+      const sensors = state.sensors.filter(
+        (s) => !erased.has(s.row * state.dimensions.cols + s.col)
+      );
+      return { ...state, blockedCells: blocked, doorCells: doors, gasLeaks, sensors };
     }
     case "RESET":
       return makeInitialState();
@@ -153,6 +174,9 @@ export function useSimulation() {
       }
       if (activeTool === "door") {
         dispatch({ type: "SET_DOOR", indices: cells.map(({ row, col }) => row * dimensions.cols + col) }); return;
+      }
+      if (activeTool === "eraser") {
+        dispatch({ type: "ERASE", indices: cells.map(({ row, col }) => row * dimensions.cols + col) }); return;
       }
     }, []
   );

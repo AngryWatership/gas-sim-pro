@@ -49,7 +49,7 @@ export const defaultConfig: GeneratorConfig = {
 
   randomiseLeaks: true,
   leakCountMin: 1,
-  leakCountMax: 8,
+  leakCountMax: 1,
 
   randomiseSensors: true,
   sensorCountMin: 4,

@@ -82,7 +82,7 @@ aggregated as (
 
         max(b.sensor_reading) - min(b.sensor_reading)                  as sensor_delta,
         avg(b.sensor_reading)                                           as sensor_mean,
-        stddev_samp(b.sensor_reading)                                   as reading_variance,
+        var_samp(b.sensor_reading)                                      as reading_variance,
         safe_divide(sum(b.sensor_row * b.sensor_reading),
                     nullif(sum(b.sensor_reading), 0))                   as centroid_row,
         safe_divide(sum(b.sensor_col * b.sensor_reading),
@@ -254,6 +254,16 @@ select
     coalesce(walls_q3, 0) as walls_q3, coalesce(walls_q4, 0) as walls_q4,
     coalesce(walls_near_centroid, 0) as walls_near_centroid,
     coalesce(walls_blocking_top1, 0) as walls_blocking_top1,
+    -- Derived spatial features
+    coalesce(centroid_row, 50.0) - wind_y * 5                  as wind_corr_row,
+    coalesce(centroid_col, 50.0) - wind_x * 5                  as wind_corr_col,
+    coalesce(top1_row, 50.0) - coalesce(centroid_row, 50.0)    as disp_row,
+    coalesce(top1_col, 50.0) - coalesce(centroid_col, 50.0)    as disp_col,
+    coalesce(walls_q1, 0) + coalesce(walls_q3, 0)
+        - coalesce(walls_q2, 0) - coalesce(walls_q4, 0)        as wall_asymmetry_col,
+    coalesce(walls_q1, 0) + coalesce(walls_q2, 0)
+        - coalesce(walls_q3, 0) - coalesce(walls_q4, 0)        as wall_asymmetry_row,
+
     -- Targets
     coalesce(target_centroid_row, 50.0) as target_centroid_row,
     coalesce(target_centroid_col, 50.0) as target_centroid_col,

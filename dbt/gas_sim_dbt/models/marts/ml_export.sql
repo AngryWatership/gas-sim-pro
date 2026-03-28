@@ -18,7 +18,6 @@ select
 
     -- Triangulation (precomputed in fct_training_examples)
     top3_centroid_row, top3_centroid_col,
-    t1_t2_ratio, t1_t3_ratio,
     t1_t2_dist, t1_t3_dist,
     t1_t2_vec_row, t1_t2_vec_col,
 
@@ -29,6 +28,11 @@ select
     wall_spread_row, wall_spread_col,
     walls_q1, walls_q2, walls_q3, walls_q4,
     walls_near_centroid, walls_blocking_top1,
+
+    -- Derived spatial features
+    wind_corr_row, wind_corr_col,
+    disp_row, disp_col,
+    wall_asymmetry_col, wall_asymmetry_row,
 
     -- Targets
     target_centroid_row, target_centroid_col,

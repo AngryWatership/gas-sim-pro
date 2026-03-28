@@ -3,36 +3,45 @@ version: 2
 models:
   - name: ml_export
     description: >
-      ML-ready training table — single-leak (n_leaks=1), signal-filtered
-      (sensor_delta >= 0.01). Includes all engineered features: sensor
-      aggregates, top-3 spatial, triangulation, full Approach A wall/door
-      layout (14 features), targets.
+      ML-ready training table — single-leak (target_n_leaks=1), signal-filtered
+      (sensor_delta >= 0.01). Contains all 33 production features including
+      derived spatial features. No ratio features (t1_t2_ratio, t1_t3_ratio removed).
     columns:
       - name: sensor_delta
         tests: [not_null]
       - name: wind_angle
         tests: [not_null]
-      - name: wind_magnitude
-        tests: [not_null]
-      - name: centroid_row
-        tests: [not_null]
-      - name: centroid_col
+      - name: sensor_count
         tests: [not_null]
       - name: top1_row
         tests: [not_null]
       - name: top1_col
         tests: [not_null]
-      - name: n_walls
+      - name: top1_reading
         tests: [not_null]
-      - name: n_doors
+      - name: top3_centroid_row
+        tests: [not_null]
+      - name: top3_centroid_col
+        tests: [not_null]
+      - name: n_walls
         tests: [not_null]
       - name: wall_density
         tests: [not_null]
       - name: open_path_ratio
         tests: [not_null]
-      - name: walls_near_centroid
-        tests: [not_null]
       - name: walls_blocking_top1
+        tests: [not_null]
+      - name: wind_corr_row
+        tests: [not_null]
+      - name: wind_corr_col
+        tests: [not_null]
+      - name: disp_row
+        tests: [not_null]
+      - name: disp_col
+        tests: [not_null]
+      - name: wall_asymmetry_col
+        tests: [not_null]
+      - name: wall_asymmetry_row
         tests: [not_null]
       - name: target_centroid_row
         tests: [not_null]
