@@ -129,6 +129,8 @@ export function useSimulation() {
   // rAF loop — immune to tab throttling
   const rafRef = useRef<number>(0);
   const lastTickRef = useRef<number>(0);
+  const inferenceCounter = useRef(0);
+
 
   useEffect(() => {
     if (!running) { cancelAnimationFrame(rafRef.current); return; }
@@ -140,7 +142,9 @@ export function useSimulation() {
         lastTickRef.current = now;
         const next = stepDiffusion(stateRef.current, paramsRef.current, windShadowRef.current);
         dispatch({ type: "SET_GRID", grid: next.grid });
-        runInference({ ...stateRef.current, grid: next.grid }, paramsRef.current);
+        if (inferenceCounter.current % 10 === 0) {  // every 10 ticks = 300ms
+          runInference({ ...stateRef.current, grid: next.grid }, paramsRef.current);
+        }
       }
       rafRef.current = requestAnimationFrame(tick);
     }

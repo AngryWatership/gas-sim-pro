@@ -22,6 +22,11 @@ const REGISTRY_URL: string | undefined = import.meta.env.VITE_GCS_REGISTRY_URL;
 const IS_DEVELOPER = import.meta.env.VITE_IS_DEVELOPER === "true";
 const POLL_MS = 60_000;
 
+// At top of useTrainButton.ts
+const IS_DEMO_MODE = import.meta.env.VITE_DEMO_MODE === "true";
+
+
+
 export type TrainButtonState =
   | "active"        // purple — new data, no trained model
   | "current"       // grey   — model is current
@@ -64,6 +69,18 @@ export function useTrainButton(): UseTrainButton {
   const [isTraining,   setIsTraining]   = useState(false);
   const [gateStatus,   setGateStatus]   = useState<string | null>(null);
   const clickedAt = useRef<number | null>(null);
+
+
+  if (IS_DEMO_MODE) {
+    return {
+      state:        "current",
+      modelVersion: import.meta.env.VITE_MODEL_VERSION ?? "demo",
+      lastMae:      parseFloat(import.meta.env.VITE_MODEL_MAE ?? "0"),
+      isTraining:   false,
+      gateStatus:   null,
+      onTrain:      () => window.open(COLAB_URL, "_blank"),
+    };
+  };
 
   const check = useCallback(async () => {
     if (!REGISTRY_URL) { setState("no_registry"); return; }
