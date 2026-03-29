@@ -69,8 +69,9 @@ FEATURES = [
     "wind_corr_col",         # 30
     "disp_row",              # 31
     "disp_col",              # 32
+    "t1_t2_ratio",           # 33
 ]
-N_FEATURES = len(FEATURES)  # 33
+N_FEATURES = len(FEATURES)  # 34
 
 # ── Global state ──────────────────────────────────────────────────────────
 _model    = None
@@ -171,6 +172,9 @@ def _build_features(req: PredictRequest) -> np.ndarray:
     top2_v, top2_r, top2_c = get(1)
     top3_v, top3_r, top3_c = get(2)
 
+    # Ratios
+    t1_t2_ratio  = min(top1_v / (top2_v + 1e-9), 10000.0)
+
     # Triangulation
     top_total    = top1_v + top2_v + top3_v + 1e-9
     top3_cen_row = (top1_r*top1_v + top2_r*top2_v + top3_r*top3_v) / top_total
@@ -220,6 +224,7 @@ def _build_features(req: PredictRequest) -> np.ndarray:
         wind_corr_col,                  # 30 wind_corr_col
         disp_row,                       # 31 disp_row
         disp_col,                       # 32 disp_col
+        t1_t2_ratio,                    # 33 t1_t2_ratio
     ]
 
     assert len(feat) == N_FEATURES, f"Feature count mismatch: {len(feat)} vs {N_FEATURES}"
