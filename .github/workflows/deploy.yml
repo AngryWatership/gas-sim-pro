@@ -38,6 +38,7 @@ jobs:
           VITE_INGEST_URL:         ${{ secrets.VITE_INGEST_URL }}
           VITE_INGEST_TOKEN:       ${{ secrets.VITE_INGEST_TOKEN }}
           VITE_COLAB_NOTEBOOK_URL: ${{ secrets.VITE_COLAB_NOTEBOOK_URL }}
+          VITE_IS_DEVELOPER:       "false"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
